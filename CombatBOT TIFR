@@ -1,0 +1,1562 @@
+-- I'm giving it to you folks, you can customize this idiot as you want
+-- Please keep credits if you are going to re-upload the code or a modified version
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Window = Rayfield:CreateWindow({
+    Name = "CombotBot TIFR",
+    LoadingTitle = "CombotBot TIFR",
+    LoadingSubtitle = "Standalone | by Innovator",
+    Theme = "DarkBlue",
+    ConfigurationSaving = { Enabled = true, FolderName = "CombotBotHubTIFR", FileName = "Config" },
+    Discord = { Enabled = false, Invite = "noinvitelink", RememberJoins = true },
+    KeySystem = false
+})
+
+local Players      = game:GetService("Players")
+local RunService   = game:GetService("RunService")
+local UIS          = game:GetService("UserInputService")
+local Stats        = game:GetService("Stats")
+local RS           = game:GetService("ReplicatedStorage")
+local VIM          = game:GetService("VirtualInputManager")
+local PathService  = game:GetService("PathfindingService")
+
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoid  = character:FindFirstChildOfClass("Humanoid")
+local root      = character:FindFirstChild("HumanoidRootPart")
+
+local function UpdateCharRefs()
+    character = player.Character
+    if character then
+        humanoid = character:FindFirstChildOfClass("Humanoid")
+        root     = character:FindFirstChild("HumanoidRootPart")
+    end
+end
+
+local Enabled            = false
+local Active             = false
+local Radius             = 500
+local AttackDistance     = 12
+local StrafeAmount       = 1
+local autoEquip          = true
+local UseAbilities       = true
+local AbilityCooldown    = 1.5
+
+local RequireToolMode    = true
+local PersistOnDeath     = true
+
+local UsePathfinding     = true
+local UseDodge           = true
+local UseAntiAir         = true
+local UseAimAssist       = true
+local UseRetreat         = true
+local UseSmartTarget     = true
+
+local PassivePlayersMode = false
+local PassiveRetaliate   = true
+
+local DodgeRange         = 22
+local DodgeCooldown      = 0.55
+local DodgeDuration      = 0.28
+local DodgeReaction      = 0.1
+
+local RetreatHPThreshold = 0.35
+local MultiThreatCount   = 3
+
+local WeightDistance     = 1.0
+local WeightLowHP        = 800
+local WeightPlayer       = 500
+local WeightAttacker     = 2000
+local WeightArmed        = 150
+local WeightBackTurned   = 300
+local WeightNPC          = 0
+local WeightThreatToMe   = 400
+local WeightAlreadyHurt  = 250
+
+local MaxTargetDistance  = 500
+local AttackersOnlyMode  = false
+local PreferClosestMode  = false
+
+local PredictVelocityFactor = 1.0
+local PredictAccelFactor    = 0.5
+local PredictPingFactor     = 0.7
+local PredictBaseTime       = 0.08
+local PredictMaxDistance    = 25
+local UseServerPing         = true
+
+local AutoPortalEnabled  = false
+local PortalRadius       = 80
+local PortalPauseTime    = 3
+local PortalCache        = nil
+local LastPortalSearch   = 0
+
+local AbilityMode        = "Cycle"
+local AbilityKeysList    = {Enum.KeyCode.E, Enum.KeyCode.Q, Enum.KeyCode.R, Enum.KeyCode.F}
+
+local LastAbilityUse     = 0
+local LastAttacker       = nil
+local LastAttackerTime   = 0
+local PortalPauseUntil   = 0
+local DefaultWalkSpeed   = 16
+local ServerPing         = 0
+local ServerPingTime     = 0
+
+local jumpCooldownMin    = 2
+local jumpCooldownMax    = 4
+
+local bodyGyro = Instance.new("BodyGyro")
+bodyGyro.Name = "CombotBot_Gyro"
+bodyGyro.MaxTorque = Vector3.new(1,1,1) * 500000
+bodyGyro.P = 100000
+bodyGyro.D = 1000
+bodyGyro.Parent = RS
+
+local function EnableGyro()  bodyGyro.Parent = root end
+local function DisableGyro()
+    bodyGyro.Parent = RS
+    if humanoid then humanoid.AutoRotate = true end
+end
+
+local lastStrafe = 0
+local currentMoveTarget = nil
+local moveAlpha = 0
+
+local stuckPositions = {}
+local stuckTimer = 0
+local isStuck = false
+local stuckAttempts = 0
+local stuckDirection = Vector3.new(1, 0, 0)
+local lastJumpTime = 0
+local jumpCooldown = 3.5
+local lastStuckCheck = tick()
+
+local flankMode = false
+local flankTimer = tick()
+local flankDuration = 5
+
+local targetHistory = {}
+local lastTargetRef = nil
+
+local currentPath = nil
+local currentWaypoints = {}
+local currentWaypointIndex = 1
+local lastPathCompute = 0
+local lastPathTarget = nil
+local pathRecomputeInterval = 0.35
+
+local dodgeEndTime = 0
+local dodgeDir = Vector3.new(0, 0, 0)
+local dodgeLastTrigger = 0
+local dodgeThreatVel = Vector3.new(0, 0, 0)
+
+local NPCCache = {}
+local LastNPCCacheUpdate = 0
+local NPCCacheUpdateInterval = 2
+
+local HostilePlayers = {}
+
+local function IsAlive(model)
+    if not model then return false end
+    local h = model:FindFirstChildOfClass("Humanoid")
+    return h and h.Health > 0
+end
+
+local function GetClientPing()
+    local ok, v = pcall(function()
+        return Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
+    end)
+    if ok and v then return math.min(v / 1000, 0.5) end
+    return 0.05
+end
+
+local function UpdateServerPing()
+    local now = tick()
+    if now - ServerPingTime < 1 then return end
+    ServerPingTime = now
+    local ok, v = pcall(function()
+        return Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
+    end)
+    if ok and v then ServerPing = v / 1000 end
+end
+
+local function GetCombinedPing()
+    if UseServerPing then
+        return math.max(GetClientPing(), ServerPing)
+    end
+    return GetClientPing()
+end
+
+local function HasLOS(pos1, pos2, ignoreList)
+    local p = RaycastParams.new()
+    p.FilterDescendantsInstances = ignoreList or {character}
+    p.FilterType = Enum.RaycastFilterType.Blacklist
+    local dir = pos2 - pos1
+    local dist = dir.Magnitude
+    if dist < 0.01 then return true end
+    return workspace:Raycast(pos1, dir.Unit * dist, p) == nil
+end
+
+local function IsNPC(model)
+    if not model or not model:IsA("Model") then return false end
+    local h = model:FindFirstChildOfClass("Humanoid")
+    if not h then return false end
+    for _, p in pairs(Players:GetPlayers()) do
+        if p.Character == model then return false end
+    end
+    local n = model.Name:lower()
+    if n:find("stand") or n:find("trolllook") then return false end
+    return true
+end
+
+local function UpdateNPCCache()
+    local now = tick()
+    if now - LastNPCCacheUpdate < NPCCacheUpdateInterval then return end
+    LastNPCCacheUpdate = now
+    NPCCache = {}
+    local function scan(container, depth)
+        if depth > 2 then return end
+        for _, m in pairs(container:GetChildren()) do
+            if m:IsA("Model") and IsNPC(m) then
+                local rp = m:FindFirstChild("HumanoidRootPart")
+                if rp and rp:IsA("BasePart") then
+                    NPCCache[m] = rp
+                end
+            elseif (m:IsA("Folder") or m:IsA("Model")) and m ~= character then
+                scan(m, depth + 1)
+            end
+        end
+    end
+    scan(workspace, 0)
+end
+
+local function HasTool()
+    if not character then return false end
+    if character:FindFirstChildOfClass("Tool") then return true end
+    if player.Backpack and player.Backpack:FindFirstChildOfClass("Tool") then return true end
+    return false
+end
+
+local function IsPlayerCharacter(model)
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= player and p.Character == model then return true end
+    end
+    return false
+end
+
+local function IsHostilePlayer(model)
+    if not IsPlayerCharacter(model) then return false end
+    return HostilePlayers[model] and (tick() - HostilePlayers[model] < 30)
+end
+
+local function MarkHostile(model)
+    if not model then return end
+    HostilePlayers[model] = tick()
+    LastAttacker = model
+    LastAttackerTime = tick()
+end
+
+local function IsAttackingUs(model)
+    if not model then return false end
+    local rp = model:FindFirstChild("HumanoidRootPart")
+    if not rp or not root then return false end
+    local tool = model:FindFirstChildOfClass("Tool")
+    if not tool then return false end
+    local d = (rp.Position - root.Position).Magnitude
+    if d > 15 then return false end
+    local toUs = (root.Position - rp.Position)
+    if toUs.Magnitude < 0.01 then return true end
+    local dot = rp.CFrame.LookVector:Dot(toUs.Unit)
+    return dot > 0.5
+end
+
+local function ScoreTarget(model, r)
+    if not model or not r then return -math.huge end
+    local h = model:FindFirstChildOfClass("Humanoid")
+    if not h or h.Health <= 0 then return -math.huge end
+
+    local dist = (r.Position - root.Position).Magnitude
+    if dist > Radius or dist > MaxTargetDistance then return -math.huge end
+
+    local isPlayerChar = IsPlayerCharacter(model)
+
+    if PassivePlayersMode and isPlayerChar then
+        if PassiveRetaliate then
+            if not IsHostilePlayer(model) and not IsAttackingUs(model) then
+                return -math.huge
+            end
+        else
+            return -math.huge
+        end
+    end
+
+    if AttackersOnlyMode and not IsAttackingUs(model) and not IsHostilePlayer(model) then
+        return -math.huge
+    end
+
+    if PreferClosestMode or not UseSmartTarget then
+        return 10000 - dist
+    end
+
+    local score = 0
+    score = score + (1000 - dist) * WeightDistance
+
+    if isPlayerChar then
+        score = score + WeightPlayer
+    else
+        score = score + WeightNPC
+    end
+
+    local hpRatio = h.Health / math.max(h.MaxHealth, 1)
+    score = score + (1 - hpRatio) * WeightLowHP
+
+    if hpRatio < 0.5 then
+        score = score + WeightAlreadyHurt
+    end
+
+    if model == LastAttacker and tick() - LastAttackerTime < 5 then
+        score = score + WeightAttacker
+    end
+
+    if IsHostilePlayer(model) then
+        score = score + WeightAttacker
+    end
+
+    local toUs = (root.Position - r.Position)
+    if toUs.Magnitude > 0.01 then
+        toUs = toUs.Unit
+        local facing = r.CFrame.LookVector
+        if facing:Dot(toUs) < -0.3 then
+            score = score + WeightBackTurned
+        end
+    end
+
+    if model:FindFirstChildOfClass("Tool") then
+        score = score + WeightArmed
+    end
+
+    if IsAttackingUs(model) then
+        score = score + WeightThreatToMe
+    end
+
+    return score
+end
+
+local function GetTarget()
+    if not character or not root then return nil end
+
+    local best, bestScore = nil, -math.huge
+
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= player and p.Character and IsAlive(p.Character) then
+            local r = p.Character:FindFirstChild("HumanoidRootPart")
+            if r then
+                local sc = ScoreTarget(p.Character, r)
+                if sc > bestScore then bestScore = sc; best = p.Character end
+            end
+        end
+    end
+
+    UpdateNPCCache()
+    for npc, r in pairs(NPCCache) do
+        if r and r.Parent and IsAlive(npc) then
+            local sc = ScoreTarget(npc, r)
+            if sc > bestScore then bestScore = sc; best = npc end
+        end
+    end
+
+    return best
+end
+
+local function GetEnemyHitboxSize(target)
+    if not target then return 2 end
+    for _, tool in pairs(target:GetChildren()) do
+        if tool:IsA("Tool") then
+            local hb = tool:FindFirstChild("Hitbox", true)
+            if hb and hb:IsA("BasePart") then
+                return math.max(hb.Size.X, hb.Size.Y, hb.Size.Z) / 2
+            end
+        end
+    end
+    local r = target:FindFirstChild("HumanoidRootPart")
+    if r then return math.max(r.Size.X, r.Size.Y, r.Size.Z) / 2 end
+    return 2
+end
+
+local function GetMyHitboxSize()
+    if not character then return 2 end
+    local tool = character:FindFirstChildOfClass("Tool")
+    if tool then
+        local hb = tool:FindFirstChild("Hitbox", true)
+        if hb and hb:IsA("BasePart") then
+            return math.max(hb.Size.X, hb.Size.Y, hb.Size.Z) / 2
+        end
+    end
+    return 2
+end
+
+local function PredictTargetPosition(target)
+    local r = target:FindFirstChild("HumanoidRootPart")
+    if not r then return nil, 0 end
+
+    local now = tick()
+    local pingComp = GetCombinedPing()
+
+    table.insert(targetHistory, {pos = r.Position, time = now})
+    while #targetHistory > 12 or (#targetHistory > 0 and now - targetHistory[1].time > 0.5) do
+        table.remove(targetHistory, 1)
+    end
+
+    if #targetHistory < 3 then
+        return r.Position, 0
+    end
+
+    local oldest = targetHistory[1]
+    local newest = targetHistory[#targetHistory]
+    local dt = newest.time - oldest.time
+    if dt < 0.02 then return r.Position, 0 end
+
+    local avgVel = (newest.pos - oldest.pos) / dt
+
+    local accel = Vector3.zero
+    if #targetHistory >= 3 then
+        local a = targetHistory[#targetHistory - 2]
+        local b = targetHistory[#targetHistory - 1]
+        local c = targetHistory[#targetHistory]
+        local v1 = (b.pos - a.pos) / math.max(b.time - a.time, 0.001)
+        local v2 = (c.pos - b.pos) / math.max(c.time - b.time, 0.001)
+        accel = (v2 - v1) / math.max(c.time - a.time, 0.001)
+    end
+
+    local t = pingComp * PredictPingFactor + PredictBaseTime
+    local predicted = r.Position
+        + avgVel * t * PredictVelocityFactor
+        + accel * (t * t) * PredictAccelFactor
+
+    if UseAntiAir then
+        local th = target:FindFirstChildOfClass("Humanoid")
+        if th and th.FloorMaterial == Enum.Material.Air then
+            local g = workspace.Gravity
+            local yOff = avgVel.Y * t - 0.5 * g * t * t
+            predicted = Vector3.new(predicted.X, r.Position.Y + yOff, predicted.Z)
+        end
+    end
+
+    local offset = predicted - r.Position
+    if offset.Magnitude > PredictMaxDistance then
+        predicted = r.Position + offset.Unit * PredictMaxDistance
+    end
+
+    return predicted, avgVel.Magnitude
+end
+
+local function ResetPath()
+    currentPath = nil
+    currentWaypoints = {}
+    currentWaypointIndex = 1
+    lastPathTarget = nil
+end
+
+local function ComputePath(startPos, targetPos)
+    if not UsePathfinding then return nil end
+
+    local now = tick()
+    if now - lastPathCompute < pathRecomputeInterval and currentPath then
+        return currentWaypoints, currentWaypointIndex
+    end
+    if lastPathTarget and (targetPos - lastPathTarget).Magnitude < 6 and currentPath then
+        return currentWaypoints, currentWaypointIndex
+    end
+
+    lastPathCompute = now
+    lastPathTarget = targetPos
+
+    local path = PathService:CreatePath({
+        AgentRadius = 2.5,
+        AgentHeight = 5.5,
+        AgentCanJump = true,
+        AgentCanClimb = false,
+        WaypointSpacing = 5,
+        Costs = { Water = 30 }
+    })
+
+    local ok = pcall(function() path:ComputeAsync(startPos, targetPos) end)
+    if ok and path.Status == Enum.PathStatus.Success then
+        currentPath = path
+        currentWaypoints = path:GetWaypoints()
+        currentWaypointIndex = 2
+        return currentWaypoints, currentWaypointIndex
+    end
+    currentPath = nil
+    return nil
+end
+
+local function SmoothMoveTo(hum, targetPos)
+    if not hum then return end
+    if not currentMoveTarget then
+        currentMoveTarget = targetPos
+        moveAlpha = 0
+    end
+    moveAlpha = math.min(moveAlpha + 0.05, 1)
+    currentMoveTarget = currentMoveTarget:Lerp(targetPos, moveAlpha)
+    hum:MoveTo(currentMoveTarget)
+end
+
+local function FollowPath(hum, rootPart)
+    if not currentPath or #currentWaypoints == 0 then return false end
+    if currentPath.Status ~= Enum.PathStatus.Success then return false end
+
+    local wp = currentWaypoints[currentWaypointIndex]
+    if not wp then return false end
+
+    if wp.Action == Enum.PathWaypointAction.Jump then
+        hum.Jump = true
+    end
+
+    local flatDist = (Vector3.new(rootPart.Position.X, 0, rootPart.Position.Z) -
+                      Vector3.new(wp.Position.X, 0, wp.Position.Z)).Magnitude
+    if flatDist < 4 then
+        currentWaypointIndex = currentWaypointIndex + 1
+        if currentWaypointIndex > #currentWaypoints then
+            return false
+        end
+    end
+
+    SmoothMoveTo(hum, wp.Position)
+    return true
+end
+
+local function CheckIfStuck()
+    if not root or not humanoid then return false end
+    local now = tick()
+    local dt = now - lastStuckCheck
+    lastStuckCheck = now
+    if dt > 0.5 then dt = 0.016 end
+
+    if humanoid.MoveDirection.Magnitude < 0.1 then
+        stuckTimer = stuckTimer + dt
+        if stuckTimer > 1.5 then return true end
+        return false
+    end
+
+    table.insert(stuckPositions, root.Position)
+    if #stuckPositions > 20 then table.remove(stuckPositions, 1) end
+    if #stuckPositions < 15 then return false end
+
+    local dist = (stuckPositions[#stuckPositions] - stuckPositions[1]).Magnitude
+    if dist < 3 then
+        stuckTimer = stuckTimer + dt
+        if stuckTimer > 1.0 then return true end
+    else
+        stuckTimer = 0
+        stuckAttempts = 0
+    end
+    return false
+end
+
+local function Unstuck()
+    if not root or not humanoid then return end
+    ResetPath()
+    stuckAttempts = stuckAttempts + 1
+    if stuckAttempts <= 2 then
+        humanoid.Jump = true
+        task.wait(0.1)
+        local ang = math.random(-60, 60)
+        local dir = Vector3.new(math.sin(math.rad(ang)), 0, math.cos(math.rad(ang)))
+        if dir.Magnitude > 0.1 then
+            dir = dir.Unit
+            humanoid:MoveTo(root.Position + dir * 15)
+            stuckDirection = dir
+        end
+    elseif stuckAttempts <= 4 then
+        local right = stuckDirection:Cross(Vector3.new(0, 1, 0))
+        if right.Magnitude > 0.1 then
+            right = right.Unit
+            local side = (stuckAttempts % 2 == 0) and right or -right
+            humanoid:MoveTo(root.Position + side * 20)
+            humanoid.Jump = true
+        end
+    else
+        humanoid:MoveTo(root.Position - stuckDirection * 25)
+        humanoid.Jump = true
+        stuckAttempts = 0
+    end
+    stuckPositions = {}
+    stuckTimer = 0
+end
+
+local enemyToolConns = {}
+
+local function PredictEnemyAttackLanding(enemyChar)
+    local erp = enemyChar:FindFirstChild("HumanoidRootPart")
+    if not erp or not root then return nil end
+    local dir = (root.Position - erp.Position)
+    if dir.Magnitude < 0.01 then return nil end
+    dir = dir.Unit
+    local dist = (root.Position - erp.Position).Magnitude
+    local pingComp = GetCombinedPing()
+    local enemyVel = erp.AssemblyLinearVelocity or Vector3.zero
+    local proj = dir * dist + enemyVel * (pingComp + DodgeReaction)
+    return erp.Position + proj
+end
+
+local function OnEnemyAttack(enemyChar)
+    if not UseDodge then return end
+    if not character or not root or not humanoid then return end
+    if tick() - dodgeLastTrigger < DodgeCooldown then return end
+
+    MarkHostile(enemyChar)
+
+    local erp = enemyChar and enemyChar:FindFirstChild("HumanoidRootPart")
+    if not erp then return end
+    local d = (erp.Position - root.Position).Magnitude
+    if d > DodgeRange then return end
+
+    local toUs = (root.Position - erp.Position)
+    if toUs.Magnitude < 0.01 then return end
+    toUs = toUs.Unit
+    local facing = erp.CFrame.LookVector
+    if facing:Dot(toUs) < 0.35 then return end
+
+    local landing = PredictEnemyAttackLanding(enemyChar)
+    local incomingDir
+    if landing then
+        incomingDir = (root.Position - landing)
+        if incomingDir.Magnitude > 0.01 then
+            incomingDir = incomingDir.Unit
+        else
+            incomingDir = (root.Position - erp.Position).Unit
+        end
+    else
+        incomingDir = (root.Position - erp.Position).Unit
+    end
+
+    local incomingVel = erp.AssemblyLinearVelocity or Vector3.zero
+    local perp = incomingDir:Cross(Vector3.new(0, 1, 0))
+    if perp.Magnitude < 0.1 then
+        perp = incomingVel:Cross(Vector3.new(0, 1, 0))
+    end
+    if perp.Magnitude < 0.1 then
+        perp = Vector3.new(1, 0, 0)
+    end
+    perp = perp.Unit
+
+    if incomingVel.Magnitude > 1 then
+        local velSide = incomingVel.Unit:Cross(Vector3.new(0, 1, 0))
+        if velSide.Magnitude > 0.1 then
+            velSide = velSide.Unit
+            if velSide:Dot(perp) < 0 then perp = -perp end
+        end
+    end
+
+    local side = (math.random() < 0.5) and 1 or -1
+    dodgeDir = (perp * side * 0.95 - incomingDir * 0.25).Unit
+    dodgeEndTime = tick() + DodgeDuration
+    dodgeLastTrigger = tick()
+    dodgeThreatVel = incomingVel
+end
+
+local function WatchEnemy(ec)
+    if not ec or enemyToolConns[ec] then return end
+    enemyToolConns[ec] = {}
+
+    local function onChild(child)
+        if child:IsA("Tool") then
+            local c = child:GetPropertyChangedSignal("Enabled"):Connect(function()
+                if child.Enabled then OnEnemyAttack(ec) end
+            end)
+            table.insert(enemyToolConns[ec], c)
+        end
+    end
+
+    for _, child in pairs(ec:GetChildren()) do onChild(child) end
+    table.insert(enemyToolConns[ec], ec.ChildAdded:Connect(onChild))
+end
+
+local function UnwatchEnemy(ec)
+    local conns = enemyToolConns[ec]
+    if not conns then return end
+    for _, c in pairs(conns) do pcall(function() c:Disconnect() end) end
+    enemyToolConns[ec] = nil
+end
+
+for _, p in pairs(Players:GetPlayers()) do
+    if p ~= player and p.Character then WatchEnemy(p.Character) end
+    p.CharacterAdded:Connect(function(c) task.wait(0.5) WatchEnemy(c) end)
+end
+Players.PlayerAdded:Connect(function(p)
+    p.CharacterAdded:Connect(function(c) task.wait(0.5) WatchEnemy(c) end)
+    if p.Character then WatchEnemy(p.Character) end
+end)
+Players.PlayerRemoving:Connect(function(p)
+    if p.Character then UnwatchEnemy(p.Character) end
+end)
+
+local function ApplyDodge(hum)
+    if tick() >= dodgeEndTime then return false end
+    if not root then return false end
+
+    local target = root.Position + dodgeDir * 22
+
+    local checkParams = RaycastParams.new()
+    checkParams.FilterDescendantsInstances = {character}
+    checkParams.FilterType = Enum.RaycastFilterType.Blacklist
+    local hit = workspace:Raycast(root.Position + Vector3.new(0, 2, 0),
+        (target - root.Position).Unit * 22, checkParams)
+    if hit then
+        target = root.Position + dodgeDir * (hit.Distance - 2)
+    end
+
+    hum:MoveTo(target)
+    if hum.FloorMaterial ~= Enum.Material.Air and math.random(1, 2) == 1 then
+        hum.Jump = true
+    end
+    return true
+end
+
+local function FindBest(tool, part, predictedPos)
+    if not tool or not part or not root then return nil end
+    local handle = tool:FindFirstChild("Handle")
+    if not handle then
+        local flatAim = (part.Position - root.Position) * Vector3.new(1, 0, 1)
+        if flatAim.Magnitude > 0.1 then
+            return CFrame.new(root.Position, root.Position + flatAim.Unit)
+        end
+        return nil
+    end
+
+    local swordTip = (handle.CFrame * CFrame.new(0, 0, -(handle.Size.Z / 2 + 2))).Position
+    local aimPos = predictedPos or part.Position
+
+    local offsets = {
+        Vector3.new(0, 0, 0),
+        Vector3.new(0.5, 0, 0), Vector3.new(-0.5, 0, 0),
+        Vector3.new(0, 0.5, 0), Vector3.new(0, -0.5, 0),
+        Vector3.new(1, 0, 0),  Vector3.new(-1, 0, 0),
+        Vector3.new(0.5, 0.5, 0), Vector3.new(-0.5, -0.5, 0),
+        Vector3.new(0, 0, 1), Vector3.new(0, 0, -1)
+    }
+
+    local bestPos, bestDist = nil, math.huge
+    local rp = RaycastParams.new()
+    rp.FilterType = Enum.RaycastFilterType.Blacklist
+    rp.FilterDescendantsInstances = {character, part.Parent}
+
+    if UseAimAssist then
+        for _, off in ipairs(offsets) do
+            local check = aimPos + off
+            local dir = (check - swordTip)
+            if dir.Magnitude > 0.01 then
+                local result = workspace:Raycast(swordTip, dir.Unit * 100, rp)
+                if result and result.Instance:IsDescendantOf(part.Parent) then
+                    local d = (result.Position - swordTip).Magnitude
+                    if d < bestDist then bestDist = d; bestPos = result.Position end
+                end
+            end
+        end
+    end
+
+    if bestPos then
+        local flat = (bestPos - swordTip) * Vector3.new(1, 0, 1)
+        if flat.Magnitude > 0.1 then
+            return CFrame.new(root.Position, root.Position + flat.Unit)
+        end
+    end
+
+    local flatAim = (aimPos - root.Position) * Vector3.new(1, 0, 1)
+    if flatAim.Magnitude > 0.1 then
+        return CFrame.new(root.Position, root.Position + flatAim.Unit)
+    end
+    return nil
+end
+
+local function CanJump()
+    if not humanoid then return false end
+    if humanoid:GetState() == Enum.HumanoidStateType.Jumping then return false end
+    if humanoid:GetState() == Enum.HumanoidStateType.Freefall then return false end
+    if humanoid.FloorMaterial == Enum.Material.Air then return false end
+    return true
+end
+
+local function IsObstacleAhead(forwardDist)
+    if not root then return false end
+    local rp = RaycastParams.new()
+    rp.FilterDescendantsInstances = {character}
+    rp.FilterType = Enum.RaycastFilterType.Blacklist
+
+    local fwd = root.CFrame.LookVector * Vector3.new(1, 0, 1)
+    if fwd.Magnitude < 0.1 then return false end
+    fwd = fwd.Unit
+
+    local origins = {
+        root.Position + Vector3.new(0, -2, 0),
+        root.Position + Vector3.new(0, 1, 0),
+    }
+    for _, origin in ipairs(origins) do
+        local hit = workspace:Raycast(origin, fwd * forwardDist, rp)
+        if hit then return true end
+    end
+    return false
+end
+
+local function RandomJump()
+    if not humanoid or not root then return end
+    if not CanJump() then return end
+
+    local now = tick()
+    if now - lastJumpTime < jumpCooldown then return end
+
+    if isStuck then
+        lastJumpTime = now
+        jumpCooldown = math.random(jumpCooldownMin * 10, jumpCooldownMax * 10) / 10
+        humanoid.Jump = true
+        return
+    end
+
+    if IsObstacleAhead(5) then
+        lastJumpTime = now
+        jumpCooldown = math.random(jumpCooldownMin * 10, jumpCooldownMax * 10) / 10
+        humanoid.Jump = true
+    end
+end
+
+local function UpdateFlankMode()
+    local now = tick()
+    if now - flankTimer > flankDuration then
+        flankTimer = now
+        if math.random(1, 100) < 30 then
+            flankMode = true
+            flankDuration = math.random(2, 5)
+        else
+            flankMode = false
+            flankDuration = math.random(3, 6)
+        end
+    end
+end
+-- I hate this feature, bitch, I spent a lot of time on it Initially, I wrote it much smarter, but it didn't work and I had to turn it into this
+local abilityLoopRunning = false
+
+local function AbilityLoop()
+    if abilityLoopRunning then return end
+    abilityLoopRunning = true
+    task.spawn(function()
+        while Enabled do
+            if UseAbilities then
+                local keys = AbilityKeysList
+                if keys and #keys > 0 then
+                    local k = keys[math.random(1, #keys)]
+                    VIM:SendKeyEvent(true, k, false, nil)
+                    task.wait(0.1)
+                    VIM:SendKeyEvent(false, k, false, nil)
+                end
+            end
+            task.wait(math.random(30, 130) / 10)
+        end
+        abilityLoopRunning = false
+    end)
+end
+
+local function UseAbility(dist, target)
+    AbilityLoop()
+end
+
+local function GetPortalTargetPart(portal)
+    if not portal then return nil end
+    local gate = portal:FindFirstChild("gate")
+    if gate then
+        if gate:IsA("BasePart") then return gate end
+        if gate:IsA("Model") then
+            return gate.PrimaryPart or gate:FindFirstChildWhichIsA("BasePart")
+        end
+    end
+    return portal.PrimaryPart or portal:FindFirstChildWhichIsA("BasePart")
+end
+
+local function FindPortal()
+    local now = tick()
+    if now - LastPortalSearch < 1 then return PortalCache end
+    LastPortalSearch = now
+    local portales = workspace:FindFirstChild("portale")
+    if portales then
+        PortalCache = portales
+        return portales
+    end
+    PortalCache = nil
+    return nil
+end
+
+local function WalkToPortal(portal)
+    if not portal or not humanoid or not root then return end
+    local pPart = GetPortalTargetPart(portal)
+    if not pPart then return end
+
+    local wps = ComputePath(root.Position, pPart.Position)
+    if wps then
+        FollowPath(humanoid, root)
+    else
+        SmoothMoveTo(humanoid, pPart.Position)
+    end
+
+    local d = (root.Position - pPart.Position).Magnitude
+    if d < 4 then
+        pcall(function() firetouchinterest(root, pPart, 0) end)
+        pcall(function() firetouchinterest(root, pPart, 1) end)
+        pcall(function() firetouchinterest(humanoid, pPart, 0) end)
+        pcall(function() firetouchinterest(humanoid, pPart, 1) end)
+    end
+end
+
+local function CombotBotLoop()
+    if not Active or not character or not root or not humanoid then return end
+
+    UpdateServerPing()
+
+    if RequireToolMode and not HasTool() then
+        DisableGyro()
+        currentMoveTarget = nil
+        return
+    end
+
+    if tick() < PortalPauseUntil then
+        DisableGyro()
+        currentMoveTarget = nil
+        return
+    end
+
+    local hpRatio = humanoid.Health / math.max(humanoid.MaxHealth, 1)
+    local threatCount = 0
+    local threatCenter = Vector3.zero
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= player and p.Character then
+            local r = p.Character:FindFirstChild("HumanoidRootPart")
+            if r and (r.Position - root.Position).Magnitude < 35 then
+                threatCount = threatCount + 1
+                threatCenter = threatCenter + r.Position
+            end
+        end
+    end
+    if threatCount > 0 then threatCenter = threatCenter / threatCount end
+
+    if UseRetreat and ((hpRatio < RetreatHPThreshold and threatCount >= 1) or threatCount >= MultiThreatCount) then
+        local fleeDir
+        if threatCount > 0 then
+            fleeDir = (root.Position - threatCenter) * Vector3.new(1, 0, 1)
+        else
+            fleeDir = -root.CFrame.LookVector * Vector3.new(1, 0, 1)
+        end
+        if fleeDir.Magnitude < 0.1 then fleeDir = Vector3.new(1, 0, 0) end
+        fleeDir = fleeDir.Unit
+
+        local fleePos = root.Position + fleeDir * 40
+        local wps = ComputePath(root.Position, fleePos)
+        if wps then FollowPath(humanoid, root)
+        else SmoothMoveTo(humanoid, fleePos) end
+
+        local t = GetTarget()
+        if t then
+            local tr = t:FindFirstChild("HumanoidRootPart")
+            if tr then
+                EnableGyro()
+                bodyGyro.CFrame = CFrame.new(root.Position,
+                    Vector3.new(tr.Position.X, root.Position.Y, tr.Position.Z))
+            end
+        end
+        return
+    end
+
+    local target = GetTarget()
+    if not target then
+        DisableGyro()
+        currentMoveTarget = nil
+        lastTargetRef = nil
+        targetHistory = {}
+        return
+    end
+
+    if target ~= lastTargetRef then
+        targetHistory = {}
+        lastTargetRef = target
+    end
+
+    local h = target:FindFirstChildOfClass("Humanoid")
+    local r = target:FindFirstChild("HumanoidRootPart")
+    if not h or not r then
+        DisableGyro()
+        currentMoveTarget = nil
+        lastTargetRef = nil
+        targetHistory = {}
+        return
+    end
+
+    EnableGyro()
+    humanoid.AutoRotate = false
+
+    UseAbility((root.Position - r.Position).Magnitude, target)
+
+    isStuck = CheckIfStuck()
+    if isStuck then Unstuck(); return end
+
+    local tool = character:FindFirstChildOfClass("Tool")
+    if autoEquip and not tool then
+        local bt = player.Backpack:FindFirstChildOfClass("Tool")
+        if bt then
+            humanoid:EquipTool(bt)
+            task.wait(0.1)
+            tool = character:FindFirstChildOfClass("Tool")
+        end
+    end
+
+    local predictedPos, targetSpeed = PredictTargetPosition(target)
+    if not predictedPos then predictedPos = r.Position end
+
+    local enemyHb = GetEnemyHitboxSize(target)
+    local myHb    = GetMyHitboxSize()
+    local optimalDist = AttackDistance + enemyHb + myHb
+
+    local dist = (root.Position - r.Position).Magnitude
+    local heightDiff = r.Position.Y - root.Position.Y
+    local dirToTarget = (predictedPos - root.Position) * Vector3.new(1, 0, 1)
+    if dirToTarget.Magnitude < 0.1 then dirToTarget = Vector3.new(1, 0, 0) end
+    dirToTarget = dirToTarget.Unit
+
+    local bestCFrame = FindBest(tool, r, predictedPos)
+
+    local adj = optimalDist
+    if targetSpeed > 5 then adj = optimalDist * 0.85
+    elseif targetSpeed < 2 then adj = optimalDist * 0.7 end
+
+    if UseDodge and ApplyDodge(humanoid) then
+        DisableGyro()
+        bodyGyro.CFrame = CFrame.new(root.Position, root.Position + dodgeDir)
+        return
+    end
+
+    UpdateFlankMode()
+
+    local movePos = nil
+    if flankMode then
+        movePos = predictedPos - r.CFrame.LookVector * (adj * 0.8)
+    elseif dist > adj * 1.2 then
+        local approach = predictedPos - dirToTarget * (adj * 0.9)
+        approach = Vector3.new(approach.X, root.Position.Y + heightDiff * 0.3, approach.Z)
+        movePos = approach
+    elseif dist < adj * 0.5 then
+        local escapeDir = -dirToTarget + (dirToTarget:Cross(Vector3.new(0, 1, 0)) * 0.8)
+        movePos = root.Position + escapeDir.Unit * (adj - dist + 8)
+    else
+        local circle = (root.Position - predictedPos) * Vector3.new(1, 0, 1)
+        if circle.Magnitude < 0.1 then circle = Vector3.new(1, 0, 0) end
+        circle = circle.Unit:Cross(Vector3.new(0, 1, 0))
+        if circle.Magnitude < 0.1 then circle = Vector3.new(1, 0, 0) end
+
+        local strafeDist = 6 + StrafeAmount * 2
+        local rand = Vector3.new(
+            (math.random() - 0.5) * StrafeAmount,
+            0,
+            (math.random() - 0.5) * StrafeAmount
+        )
+        movePos = predictedPos + circle * strafeDist + rand
+    end
+
+    if movePos then
+        if HasLOS(root.Position, movePos) then
+            ResetPath()
+            SmoothMoveTo(humanoid, movePos)
+        else
+            local wps = ComputePath(root.Position, movePos)
+            if wps then FollowPath(humanoid, root)
+            else SmoothMoveTo(humanoid, movePos) end
+        end
+    end
+
+    RandomJump()
+
+    if bestCFrame then bodyGyro.CFrame = bestCFrame
+    else bodyGyro.CFrame = CFrame.new(root.Position, root.Position + dirToTarget) end
+
+    if target:FindFirstChildOfClass("ForceField") then
+        humanoid:MoveTo(root.Position - dirToTarget * 15)
+        return
+    end
+
+    local shouldAttack = false
+    if tool then
+        local lookDir = root.CFrame.LookVector
+        local toTarget = (r.Position - root.Position)
+        if toTarget.Magnitude > 0.01 then
+            local dot = lookDir:Dot(toTarget.Unit)
+            if dist <= adj * 1.1 and dot > 0.7 then shouldAttack = true end
+            if dist <= adj * 0.75 then shouldAttack = true end
+            if targetSpeed < 1 and dist <= adj * 1.15 and dot > 0.5 then shouldAttack = true end
+        end
+    end
+    if shouldAttack then
+        local activeTool = character:FindFirstChildOfClass("Tool")
+        if activeTool and activeTool.Parent == character then
+            activeTool:Activate()
+        end
+    end
+end
+
+local function StopBot()
+    ResetPath()
+    currentMoveTarget = nil
+    stuckPositions = {}
+    stuckTimer = 0
+    isStuck = false
+    flankMode = false
+    lastJumpTime = 0
+    targetHistory = {}
+    lastTargetRef = nil
+    dodgeEndTime = 0
+    DisableGyro()
+    if humanoid then humanoid.WalkSpeed = DefaultWalkSpeed end
+end
+
+local function HookHealthTracker()
+    if not humanoid then return end
+    humanoid:GetPropertyChangedSignal("Health"):Connect(function()
+        if humanoid.Health < humanoid.MaxHealth and root then
+            for _, p in pairs(Players:GetPlayers()) do
+                if p ~= player and p.Character then
+                    local r = p.Character:FindFirstChild("HumanoidRootPart")
+                    if r and (r.Position - root.Position).Magnitude < 30 then
+                        MarkHostile(p.Character)
+                    end
+                end
+            end
+        end
+    end)
+end
+HookHealthTracker()
+
+local MainTab   = Window:CreateTab("CombotBot", 4483362458)
+local TargetTab = Window:CreateTab("Targeting", 4483362458)
+local AdvTab    = Window:CreateTab("Advanced",  4483362458)
+local DodgeTab  = Window:CreateTab("Dodge & Predict", 4483362458)
+local PortalTab = Window:CreateTab("Portal", 4483362458)
+local AbilityTab = Window:CreateTab("Abilities", 4483362458)
+local ModsTab   = Window:CreateTab("Modifications", 4483362458)
+local DebugTab  = Window:CreateTab("Debug", 4483362458)
+
+MainTab:CreateSection("Master")
+MainTab:CreateToggle({
+    Name = "Enable CombotBot",
+    CurrentValue = false,
+    Flag = "BotEnabled",
+    Callback = function(v)
+        Enabled = v
+        if not v then Active = false; StopBot() end
+    end
+})
+MainTab:CreateLabel("Press U to toggle Active / Idle")
+
+MainTab:CreateSection("Combat")
+MainTab:CreateSlider({
+    Name = "Attack Distance",
+    Range = {5, 40}, Increment = 1, Suffix = " studs",
+    CurrentValue = 12, Flag = "AttackDist",
+    Callback = function(v) AttackDistance = v end
+})
+MainTab:CreateSlider({
+    Name = "Strafe Amount",
+    Range = {1, 5}, Increment = 1, Suffix = "",
+    CurrentValue = 1, Flag = "Strafe",
+    Callback = function(v) StrafeAmount = v end
+})
+
+MainTab:CreateSection("Requirements")
+MainTab:CreateToggle({
+    Name = "Require Tool In Inventory",
+    CurrentValue = true,
+    Flag = "RequireTool",
+    Callback = function(v) RequireToolMode = v end
+})
+MainTab:CreateToggle({
+    Name = "Stay Enabled After Death",
+    CurrentValue = true,
+    Flag = "PersistDeath",
+    Callback = function(v) PersistOnDeath = v end
+})
+
+TargetTab:CreateSection("Modes")
+TargetTab:CreateToggle({
+    Name = "Enable Smart Target Scoring",
+    CurrentValue = true,
+    Flag = "SmartTarget",
+    Callback = function(v) UseSmartTarget = v end
+})
+TargetTab:CreateToggle({
+    Name = "Attackers Only Mode",
+    CurrentValue = false,
+    Flag = "AttackersOnly",
+    Callback = function(v) AttackersOnlyMode = v end
+})
+TargetTab:CreateToggle({
+    Name = "Always Closest Mode",
+    CurrentValue = false,
+    Flag = "ClosestOnly",
+    Callback = function(v) PreferClosestMode = v end
+})
+
+TargetTab:CreateSection("Ranges")
+TargetTab:CreateSlider({
+    Name = "Target Radius",
+    Range = {10, 1000}, Increment = 10, Suffix = " studs",
+    CurrentValue = 500, Flag = "Radius",
+    Callback = function(v) Radius = v end
+})
+TargetTab:CreateSlider({
+    Name = "Max Target Distance",
+    Range = {10, 1000}, Increment = 10, Suffix = " studs",
+    CurrentValue = 500, Flag = "MaxTargetDist",
+    Callback = function(v) MaxTargetDistance = v end
+})
+
+TargetTab:CreateSection("Score Weights")
+TargetTab:CreateSlider({
+    Name = "Distance Weight",
+    Range = {0, 300}, Increment = 10, Suffix = " %",
+    CurrentValue = 100, Flag = "WDistance",
+    Callback = function(v) WeightDistance = v / 100 end
+})
+TargetTab:CreateSlider({
+    Name = "Low HP Weight",
+    Range = {0, 2000}, Increment = 50, Suffix = "",
+    CurrentValue = 800, Flag = "WLowHP",
+    Callback = function(v) WeightLowHP = v end
+})
+TargetTab:CreateSlider({
+    Name = "Player Weight",
+    Range = {0, 2000}, Increment = 50, Suffix = "",
+    CurrentValue = 500, Flag = "WPlayer",
+    Callback = function(v) WeightPlayer = v end
+})
+TargetTab:CreateSlider({
+    Name = "Attacker Weight",
+    Range = {0, 5000}, Increment = 100, Suffix = "",
+    CurrentValue = 2000, Flag = "WAttacker",
+    Callback = function(v) WeightAttacker = v end
+})
+TargetTab:CreateSlider({
+    Name = "Armed Weight",
+    Range = {0, 1000}, Increment = 50, Suffix = "",
+    CurrentValue = 150, Flag = "WArmed",
+    Callback = function(v) WeightArmed = v end
+})
+TargetTab:CreateSlider({
+    Name = "Back-Turned Weight",
+    Range = {0, 1500}, Increment = 50, Suffix = "",
+    CurrentValue = 300, Flag = "WBackTurned",
+    Callback = function(v) WeightBackTurned = v end
+})
+TargetTab:CreateSlider({
+    Name = "Threat-To-Me Weight",
+    Range = {0, 2000}, Increment = 50, Suffix = "",
+    CurrentValue = 400, Flag = "WThreat",
+    Callback = function(v) WeightThreatToMe = v end
+})
+TargetTab:CreateSlider({
+    Name = "Already Hurt Weight",
+    Range = {0, 1500}, Increment = 50, Suffix = "",
+    CurrentValue = 250, Flag = "WHurt",
+    Callback = function(v) WeightAlreadyHurt = v end
+})
+TargetTab:CreateSlider({
+    Name = "NPC Weight",
+    Range = {-1000, 1000}, Increment = 50, Suffix = "",
+    CurrentValue = 0, Flag = "WNPC",
+    Callback = function(v) WeightNPC = v end
+})
+
+AdvTab:CreateSection("Pathfinding")
+AdvTab:CreateToggle({
+    Name = "Use PathfindingService",
+    CurrentValue = true,
+    Flag = "Pathfinding",
+    Callback = function(v) UsePathfinding = v; if not v then ResetPath() end end
+})
+AdvTab:CreateSection("Aim-Assist")
+AdvTab:CreateToggle({
+    Name = "Aim-Assist (Raycast)",
+    CurrentValue = true,
+    Flag = "AimAssist",
+    Callback = function(v) UseAimAssist = v end
+})
+AdvTab:CreateToggle({
+    Name = "Anti-Air Prediction",
+    CurrentValue = true,
+    Flag = "AntiAir",
+    Callback = function(v) UseAntiAir = v end
+})
+
+AdvTab:CreateSection("Self Preservation")
+AdvTab:CreateToggle({
+    Name = "Retreat When Low HP / Outnumbered",
+    CurrentValue = true,
+    Flag = "Retreat",
+    Callback = function(v) UseRetreat = v end
+})
+AdvTab:CreateSlider({
+    Name = "Retreat HP Threshold",
+    Range = {5, 80}, Increment = 5, Suffix = "%",
+    CurrentValue = 35, Flag = "RetreatHP",
+    Callback = function(v) RetreatHPThreshold = v / 100 end
+})
+AdvTab:CreateSlider({
+    Name = "Multi-Threat Count",
+    Range = {2, 8}, Increment = 1, Suffix = "",
+    CurrentValue = 3, Flag = "MultiThreat",
+    Callback = function(v) MultiThreatCount = v end
+})
+
+DodgeTab:CreateSection("Dodge")
+DodgeTab:CreateToggle({
+    Name = "Enable Dodge",
+    CurrentValue = true,
+    Flag = "DodgeToggle",
+    Callback = function(v) UseDodge = v end
+})
+DodgeTab:CreateSlider({
+    Name = "Dodge Range",
+    Range = {10, 60}, Increment = 1, Suffix = " studs",
+    CurrentValue = 22, Flag = "DodgeRange",
+    Callback = function(v) DodgeRange = v end
+})
+DodgeTab:CreateSlider({
+    Name = "Dodge Cooldown",
+    Range = {10, 150}, Increment = 5, Suffix = " s",
+    CurrentValue = 55, Flag = "DodgeCD",
+    Callback = function(v) DodgeCooldown = v / 100 end
+})
+DodgeTab:CreateSlider({
+    Name = "Dodge Duration",
+    Range = {5, 100}, Increment = 5, Suffix = " s",
+    CurrentValue = 28, Flag = "DodgeDur",
+    Callback = function(v) DodgeDuration = v / 100 end
+})
+DodgeTab:CreateSlider({
+    Name = "Reaction Delay",
+    Range = {0, 50}, Increment = 1, Suffix = " s",
+    CurrentValue = 10, Flag = "DodgeReact",
+    Callback = function(v) DodgeReaction = v / 100 end
+})
+
+DodgeTab:CreateSection("Prediction")
+DodgeTab:CreateToggle({
+    Name = "Use Server Ping (RTT)",
+    CurrentValue = true,
+    Flag = "UseServerPing",
+    Callback = function(v) UseServerPing = v end
+})
+DodgeTab:CreateSlider({
+    Name = "Velocity Factor",
+    Range = {0, 300}, Increment = 10, Suffix = " %",
+    CurrentValue = 100, Flag = "PredVel",
+    Callback = function(v) PredictVelocityFactor = v / 100 end
+})
+DodgeTab:CreateSlider({
+    Name = "Acceleration Factor",
+    Range = {0, 300}, Increment = 10, Suffix = " %",
+    CurrentValue = 50, Flag = "PredAcc",
+    Callback = function(v) PredictAccelFactor = v / 100 end
+})
+DodgeTab:CreateSlider({
+    Name = "Ping Factor",
+    Range = {0, 200}, Increment = 10, Suffix = " %",
+    CurrentValue = 70, Flag = "PredPing",
+    Callback = function(v) PredictPingFactor = v / 100 end
+})
+DodgeTab:CreateSlider({
+    Name = "Base Lead Time",
+    Range = {0, 40}, Increment = 1, Suffix = " s",
+    CurrentValue = 8, Flag = "PredBase",
+    Callback = function(v) PredictBaseTime = v / 100 end
+})
+DodgeTab:CreateSlider({
+    Name = "Max Predicted Offset",
+    Range = {5, 100}, Increment = 1, Suffix = " studs",
+    CurrentValue = 25, Flag = "PredMax",
+    Callback = function(v) PredictMaxDistance = v end
+})
+
+PortalTab:CreateSection("Auto Portal")
+PortalTab:CreateToggle({
+    Name = "Enable Auto Portal",
+    CurrentValue = false,
+    Flag = "AutoPortal",
+    Callback = function(v) AutoPortalEnabled = v; PortalCache = nil end
+})
+PortalTab:CreateSlider({
+    Name = "Portal Trigger Radius",
+    Range = {10, 300}, Increment = 5, Suffix = " studs",
+    CurrentValue = 80, Flag = "PortalRadius",
+    Callback = function(v) PortalRadius = v end
+})
+PortalTab:CreateSlider({
+    Name = "Portal Pause Time",
+    Range = {1, 10}, Increment = 1, Suffix = " s",
+    CurrentValue = 3, Flag = "PortalPause",
+    Callback = function(v) PortalPauseTime = v end
+})
+
+AbilityTab:CreateSection("Ability Usage")
+AbilityTab:CreateToggle({
+    Name = "Use Abilities",
+    CurrentValue = true,
+    Flag = "UseAbil",
+    Callback = function(v) UseAbilities = v end
+})
+AbilityTab:CreateDropdown({
+    Name = "Use Mode",
+    Options = {"Cycle", "Sequence", "First", "All"},
+    CurrentOption = "Cycle",
+    Flag = "AbilityMode",
+    Callback = function(v) AbilityMode = v end
+})
+
+ModsTab:CreateSection("Combat Modifications")
+ModsTab:CreateToggle({
+    Name = "Passive Players (Don't attack players)",
+    CurrentValue = false,
+    Flag = "PassivePlayers",
+    Callback = function(v) PassivePlayersMode = v end
+})
+ModsTab:CreateToggle({
+    Name = "Retaliate Only (Attack only if attacked)",
+    CurrentValue = true,
+    Flag = "PassiveRetaliate",
+    Callback = function(v) PassiveRetaliate = v end
+})
+ModsTab:CreateLabel("If Passive Players ON and Retaliate ON:")
+ModsTab:CreateLabel("Bot attacks players only after they hurt you or attack.")
+ModsTab:CreateLabel("Hostile players stay marked for 30s.")
+ModsTab:CreateButton({
+    Name = "Clear Hostile Players List",
+    Callback = function() HostilePlayers = {} end
+})
+
+DebugTab:CreateSection("Actions")
+DebugTab:CreateButton({
+    Name = "Reset Bot State",
+    Callback = function() StopBot() end
+})
+DebugTab:CreateButton({
+    Name = "Force Portal Pause",
+    Callback = function() PortalPauseUntil = tick() + 3 end
+})
+DebugTab:CreateButton({
+    Name = "Clear Target History",
+    Callback = function() targetHistory = {} end
+})
+DebugTab:CreateButton({
+    Name = "Show Current Target",
+    Callback = function()
+        local t = GetTarget()
+        if t then
+            local h = t:FindFirstChildOfClass("Humanoid")
+            local n = t.Name
+            local hp = h and math.floor(h.Health) or "?"
+            Rayfield:Notify({ Title = "Target", Content = n .. " | HP: " .. tostring(hp), Duration = 3 })
+        else
+            Rayfield:Notify({ Title = "Target", Content = "none", Duration = 3 })
+        end
+    end
+})
+DebugTab:CreateButton({
+    Name = "Test Ability Key (E)",
+    Callback = function()
+        VIM:SendKeyEvent(true, Enum.KeyCode.E, false, nil)
+        task.wait(0.1)
+        VIM:SendKeyEvent(false, Enum.KeyCode.E, false, nil)
+        Rayfield:Notify({ Title = "Test", Content = "Sent Key E", Duration = 2 })
+    end
+})
+DebugTab:CreateButton({
+    Name = "Test Ability Key (Q)",
+    Callback = function()
+        VIM:SendKeyEvent(true, Enum.KeyCode.Q, false, nil)
+        task.wait(0.1)
+        VIM:SendKeyEvent(false, Enum.KeyCode.Q, false, nil)
+        Rayfield:Notify({ Title = "Test", Content = "Sent Key Q", Duration = 2 })
+    end
+})
+DebugTab:CreateButton({
+    Name = "Test Ability Key (R)",
+    Callback = function()
+        VIM:SendKeyEvent(true, Enum.KeyCode.R, false, nil)
+        task.wait(0.1)
+        VIM:SendKeyEvent(false, Enum.KeyCode.R, false, nil)
+        Rayfield:Notify({ Title = "Test", Content = "Sent Key R", Duration = 2 })
+    end
+})
+DebugTab:CreateButton({
+    Name = "Test Ability Key (F)",
+    Callback = function()
+        VIM:SendKeyEvent(true, Enum.KeyCode.F, false, nil)
+        task.wait(0.1)
+        VIM:SendKeyEvent(false, Enum.KeyCode.F, false, nil)
+        Rayfield:Notify({ Title = "Test", Content = "Sent Key F", Duration = 2 })
+    end
+})
+
+UIS.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.KeyCode == Enum.KeyCode.U and Enabled then
+        Active = not Active
+        if Active then
+            StopBot()
+            flankTimer = tick()
+            flankDuration = 5
+            Rayfield:Notify({ Title = "CombotBot", Content = "Activated", Duration = 2 })
+        else
+            StopBot()
+            Rayfield:Notify({ Title = "CombotBot", Content = "Deactivated", Duration = 2 })
+        end
+    end
+end)
+
+RunService.RenderStepped:Connect(function()
+    if not character or not character.Parent then UpdateCharRefs() end
+    UpdateServerPing()
+
+    if Enabled and Active and character and root and humanoid then
+        CombotBotLoop()
+    end
+
+    if AutoPortalEnabled and character and root and humanoid then
+        local portal = FindPortal()
+        if portal then
+            local pPart = GetPortalTargetPart(portal)
+            if pPart then
+                local d = (root.Position - pPart.Position).Magnitude
+                if d <= PortalRadius then
+                    PortalPauseUntil = tick() + PortalPauseTime
+                    WalkToPortal(portal)
+                end
+            end
+        end
+    end
+end)
+
+Players.LocalPlayer.CharacterAdded:Connect(function(newChar)
+    if not PersistOnDeath then
+        Active = false
+    end
+    StopBot()
+    character = newChar
+    task.wait(0.5)
+    UpdateCharRefs()
+    HookHealthTracker()
+    if humanoid then humanoid.WalkSpeed = DefaultWalkSpeed end
+    WatchEnemy(newChar)
+end)
+
+Players.PlayerRemoving:Connect(function(p)
+    if p == player then
+        StopBot()
+        for ec, _ in pairs(enemyToolConns) do UnwatchEnemy(ec) end
+        if bodyGyro then bodyGyro:Destroy() end
+    end
+end)
+
+Rayfield:LoadConfiguration()
