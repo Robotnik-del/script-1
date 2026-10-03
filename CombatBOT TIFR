@@ -25,6 +25,148 @@ local character = player.Character or player.CharacterAdded:Wait()
 local humanoid  = character:FindFirstChildOfClass("Humanoid")
 local root      = character:FindFirstChild("HumanoidRootPart")
 
+local C = {
+    Enabled = false,
+    Active = false,
+    Radius = 500,
+    AttackDistance = 12,
+    StrafeAmount = 1,
+    autoEquip = true,
+    UseAbilities = true,
+    AbilityCooldown = 1.5,
+    RequireToolMode = true,
+    PersistOnDeath = true,
+    UsePathfinding = true,
+    UseDodge = true,
+    UseAntiAir = true,
+    UseAimAssist = true,
+    UseRetreat = true,
+    UseSmartTarget = true,
+    PassivePlayersMode = false,
+    PassiveRetaliate = true,
+    DodgeRange = 22,
+    DodgeCooldown = 0.55,
+    DodgeDuration = 0.28,
+    DodgeReaction = 0.1,
+    RetreatHPThreshold = 0.35,
+    MultiThreatCount = 3,
+    MaxTargetDistance = 500,
+    AttackersOnlyMode = false,
+    PreferClosestMode = false,
+    PredictVelocityFactor = 1.0,
+    PredictAccelFactor = 0.5,
+    PredictPingFactor = 0.7,
+    PredictBaseTime = 0.08,
+    PredictMaxDistance = 25,
+    UseServerPing = true,
+    UseTargetPing = true,
+    PingSmoothing = 0.4,
+    PingUpdateInterval = 0.5,
+    AutoPortalEnabled = false,
+    PortalRadius = 80,
+    PortalPauseTime = 3,
+    AbilityMode = "Cycle",
+    AbilityKeysList = {Enum.KeyCode.E, Enum.KeyCode.Q, Enum.KeyCode.R, Enum.KeyCode.F},
+    AbilityCycleIndex = 1,
+    AbilityMinInterval = 3.0,
+    AbilityMaxInterval = 13.0,
+    AgentRadius = 2.5,
+    AgentHeight = 5.5,
+    WaypointSpacing = 5,
+    PathTimeout = 1.5,
+    PathTargetShift = 10,
+    PathRecomputeMin = 0.6,
+    PathBlockedCooldown = 0.5,
+    PathDebugEnabled = false,
+    jumpCooldownMin = 1,
+    jumpCooldownMax = 2,
+    CandyFarmEnabled = false,
+    CandyIgnorePlayers = true,
+    CandyIgnoreOtherNPCs = true,
+    CandyPriorityEnemies = true,
+    CandyMaxSearchDist = 600,
+    CandyPickupRadius = 40,
+    CandyForcePickupDist = 3.5,
+}
+
+local W = {
+    Distance = 1.0,
+    LowHP = 800,
+    Player = 500,
+    Attacker = 2000,
+    Armed = 150,
+    BackTurned = 300,
+    NPC = 0,
+    ThreatToMe = 400,
+    AlreadyHurt = 250,
+}
+
+local S = {
+    lastStrafe = 0,
+    currentMoveTarget = nil,
+    moveAlpha = 0,
+    stuckPositions = {},
+    stuckTimer = 0,
+    isStuck = false,
+    stuckAttempts = 0,
+    stuckDirection = Vector3.new(1, 0, 0),
+    lastJumpTime = 0,
+    jumpCooldown = 3.5,
+    lastStuckCheck = tick(),
+    flankMode = false,
+    flankTimer = tick(),
+    flankDuration = 5,
+    targetHistory = {},
+    lastTargetRef = nil,
+    currentPath = nil,
+    currentWaypoints = {},
+    currentWaypointIndex = 1,
+    lastPathCompute = 0,
+    lastPathTarget = nil,
+    dodgeEndTime = 0,
+    dodgeDir = Vector3.new(0, 0, 0),
+    dodgeLastTrigger = 0,
+    dodgeThreatVel = Vector3.new(0, 0, 0),
+    NPCCache = {},
+    LastNPCCacheUpdate = 0,
+    NPCCacheUpdateInterval = 3.5,
+    HostilePlayers = {},
+    lastAttackTime = {},
+    watchedModels = {},
+    botBusy = false,
+    lastBotSpawn = 0,
+    LastAbilityUse = 0,
+    LastAttacker = nil,
+    LastAttackerTime = 0,
+    PortalPauseUntil = 0,
+    PortalCache = nil,
+    LastPortalSearch = 0,
+    PortalInsideFlag = false,
+    DefaultWalkSpeed = (humanoid and humanoid.WalkSpeed) or 16,
+    PathDebugParts = {},
+    abilityLoopRunning = false,
+    CurrentCandyTarget = nil,
+    LastCandyTouch = 0,
+    RecentlyCollected = {},
+    LastFacingCF = nil,
+    lastMoundAttack = 0,
+}
+
+local EntityCache = {
+    CandyCorn = {},
+    Mounds = {},
+    CandyEnemies = {},
+    LastScan = 0,
+    Dirty = true,
+}
+
+local PingSys = {
+    LocalPing = 0.05,
+    ServerPing = 0.05,
+    PlayerPings = {},
+    LastUpdate = 0,
+}
+
 local function UpdateCharRefs()
     character = player.Character
     if character then
@@ -33,101 +175,21 @@ local function UpdateCharRefs()
     end
 end
 
-local Enabled            = false
-local Active             = false
-local Radius             = 500
-local AttackDistance     = 12
-local StrafeAmount       = 1
-local autoEquip          = true
-local UseAbilities       = true
-local AbilityCooldown    = 1.5
-
-local RequireToolMode    = true
-local PersistOnDeath     = true
-
-local UsePathfinding     = true
-local UseDodge           = true
-local UseAntiAir         = true
-local UseAimAssist       = true
-local UseRetreat         = true
-local UseSmartTarget     = true
-
-local PassivePlayersMode = false
-local PassiveRetaliate   = true
-
-local DodgeRange         = 22
-local DodgeCooldown      = 0.55
-local DodgeDuration      = 0.28
-local DodgeReaction      = 0.1
-
-local RetreatHPThreshold = 0.35
-local MultiThreatCount   = 3
-
-local WeightDistance     = 1.0
-local WeightLowHP        = 800
-local WeightPlayer       = 500
-local WeightAttacker     = 2000
-local WeightArmed        = 150
-local WeightBackTurned   = 300
-local WeightNPC          = 0
-local WeightThreatToMe   = 400
-local WeightAlreadyHurt  = 250
-
-local MaxTargetDistance  = 500
-local AttackersOnlyMode  = false
-local PreferClosestMode  = false
-
-local PredictVelocityFactor = 1.0
-local PredictAccelFactor    = 0.5
-local PredictPingFactor     = 0.7
-local PredictBaseTime       = 0.08
-local PredictMaxDistance    = 25
-local UseServerPing         = true
-
-local AutoPortalEnabled  = false
-local PortalRadius       = 80
-local PortalPauseTime    = 3
-local PortalCache        = nil
-local LastPortalSearch   = 0
-local PortalInsideFlag   = false
-
-local AbilityMode        = "Cycle"
-local AbilityKeysList    = {Enum.KeyCode.E, Enum.KeyCode.Q, Enum.KeyCode.R, Enum.KeyCode.F}
-local AbilityCycleIndex  = 1
-local AbilityMinInterval = 3.0
-local AbilityMaxInterval = 13.0
-
-local AgentRadius        = 2.5
-local AgentHeight        = 5.5
-local WaypointSpacing    = 5
-
-local PathTimeout        = 1.5
-local PathTargetShift    = 10
-local PathRecomputeMin   = 0.35
-local PathBlockedCooldown = 0.5
-local PathDebugEnabled   = false
-local PathDebugParts     = {}
-
-local LastAbilityUse     = 0
-local LastAttacker       = nil
-local LastAttackerTime   = 0
-local PortalPauseUntil   = 0
-local DefaultWalkSpeed   = (humanoid and humanoid.WalkSpeed) or 16
-local ServerPing         = 0
-local ServerPingTime     = 0
-
-local jumpCooldownMin    = 2
-local jumpCooldownMax    = 4
-
 local bodyGyro = Instance.new("BodyGyro")
 bodyGyro.Name = "CombotBot_Gyro"
-bodyGyro.MaxTorque = Vector3.new(1,1,1) * 500000
-bodyGyro.P = 100000
-bodyGyro.D = 1000
+bodyGyro.MaxTorque = Vector3.new(1,1,1) * 5e6
+bodyGyro.P = 200000
+bodyGyro.D = 1500
 bodyGyro.Parent = RS
+
+local function SetFacing(cf)
+    S.LastFacingCF = cf
+    bodyGyro.CFrame = cf
+end
 
 local function EnableGyro()
     if root and bodyGyro.Parent ~= root then bodyGyro.Parent = root end
+    if humanoid then humanoid.AutoRotate = false end
 end
 
 local function DisableGyro()
@@ -135,45 +197,9 @@ local function DisableGyro()
     if humanoid then humanoid.AutoRotate = true end
 end
 
-local lastStrafe = 0
-local currentMoveTarget = nil
-local moveAlpha = 0
-
-local stuckPositions = {}
-local stuckTimer = 0
-local isStuck = false
-local stuckAttempts = 0
-local stuckDirection = Vector3.new(1, 0, 0)
-local lastJumpTime = 0
-local jumpCooldown = 3.5
-local lastStuckCheck = tick()
-
-local flankMode = false
-local flankTimer = tick()
-local flankDuration = 5
-
-local targetHistory = {}
-local lastTargetRef = nil
-
-local currentPath = nil
-local currentWaypoints = {}
-local currentWaypointIndex = 1
-local lastPathCompute = 0
-local lastPathTarget = nil
-
-local dodgeEndTime = 0
-local dodgeDir = Vector3.new(0, 0, 0)
-local dodgeLastTrigger = 0
-local dodgeThreatVel = Vector3.new(0, 0, 0)
-
-local NPCCache = {}
-local LastNPCCacheUpdate = 0
-local NPCCacheUpdateInterval = 2
-
-local HostilePlayers = {}
-local lastAttackTime = {}
-local watchedModels  = {}
-local botBusy        = false
+local losParams = RaycastParams.new()
+losParams.FilterType = Enum.RaycastFilterType.Blacklist
+losParams.IgnoreWater = true
 
 local function IsAlive(model)
     if not model then return false end
@@ -181,39 +207,97 @@ local function IsAlive(model)
     return h and h.Health > 0
 end
 
-local function GetClientPing()
+local function SampleLocalPing()
+    local ok, v = pcall(function() return player:GetNetworkPing() end)
+    if ok and v and v > 0 then return math.min(v, 1) end
+    return nil
+end
+
+local function SampleServerPing()
     local ok, v = pcall(function()
         return Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
     end)
-    if ok and v then return math.min(v / 1000, 0.5) end
-    return 0.05
+    if ok and v then return math.min(v / 1000, 1) end
+    return nil
 end
 
-local function UpdateServerPing()
+local function SamplePlayerPing(p)
+    if not p or not p.Parent then return nil end
+    local ok, v = pcall(function() return p:GetNetworkPing() end)
+    if ok and v and v > 0 then return math.min(v, 1) end
+    return nil
+end
+
+local function EMA(old, new, alpha)
+    if not new then return old end
+    return old * (1 - alpha) + new * alpha
+end
+
+local function UpdatePingSystem()
     local now = tick()
-    if now - ServerPingTime < 1 then return end
-    ServerPingTime = now
-    local ok, v = pcall(function()
-        return Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
-    end)
-    if ok and v then ServerPing = v / 1000 end
+    if now - PingSys.LastUpdate < C.PingUpdateInterval then return end
+    PingSys.LastUpdate = now
+
+    local a = C.PingSmoothing
+
+    local lp = SampleLocalPing()
+    if lp then PingSys.LocalPing = EMA(PingSys.LocalPing, lp, a) end
+
+    local sp = SampleServerPing()
+    if sp then PingSys.ServerPing = EMA(PingSys.ServerPing, sp, a) end
+
+    for p in pairs(PingSys.PlayerPings) do
+        if not p.Parent then PingSys.PlayerPings[p] = nil end
+    end
+
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= player then
+            local v = SamplePlayerPing(p)
+            if v then
+                PingSys.PlayerPings[p] = EMA(PingSys.PlayerPings[p] or v, v, a)
+            else
+                PingSys.PlayerPings[p] = PingSys.PlayerPings[p] or 0.05
+            end
+        end
+    end
 end
 
-local function GetCombinedPing()
-    if UseServerPing then
-        return math.max(GetClientPing(), ServerPing)
+local function GetTargetPing(target)
+    if not target then return PingSys.ServerPing end
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= player and p.Character == target then
+            return PingSys.PlayerPings[p] or 0.05
+        end
     end
-    return GetClientPing()
+    return PingSys.ServerPing
+end
+
+local function GetEffectiveLatency(target)
+    local ourPing = PingSys.LocalPing
+    local srvPing = PingSys.ServerPing
+    local theirPing = 0
+    if C.UseTargetPing then
+        theirPing = GetTargetPing(target)
+    end
+    local base = (ourPing * 0.6 + srvPing * 0.4) * 0.5
+    return base + theirPing * 0.5
+end
+
+local function GetCombinedPing(target)
+    if target then
+        return GetEffectiveLatency(target)
+    end
+    if C.UseServerPing then
+        return math.max(PingSys.LocalPing, PingSys.ServerPing)
+    end
+    return PingSys.LocalPing
 end
 
 local function HasLOS(pos1, pos2, ignoreList)
-    local p = RaycastParams.new()
-    p.FilterDescendantsInstances = ignoreList or {character}
-    p.FilterType = Enum.RaycastFilterType.Blacklist
     local dir = pos2 - pos1
-    local dist = dir.Magnitude
-    if dist < 0.01 then return true end
-    return workspace:Raycast(pos1, dir.Unit * dist, p) == nil
+    if dir.Magnitude < 0.01 then return true end
+    losParams.FilterDescendantsInstances = ignoreList or {character}
+    return workspace:Raycast(pos1, dir, losParams) == nil
 end
 
 local function IsPlayerCharacter(model)
@@ -238,16 +322,16 @@ end
 
 local function UpdateNPCCache()
     local now = tick()
-    if now - LastNPCCacheUpdate < NPCCacheUpdateInterval then return end
-    LastNPCCacheUpdate = now
-    NPCCache = {}
+    if now - S.LastNPCCacheUpdate < S.NPCCacheUpdateInterval then return end
+    S.LastNPCCacheUpdate = now
+    S.NPCCache = {}
     local function scan(container, depth)
-        if depth > 3 then return end
+        if depth > 2 then return end
         for _, m in pairs(container:GetChildren()) do
             if m:IsA("Model") and IsNPC(m) then
                 local rp = m:FindFirstChild("HumanoidRootPart")
                 if rp and rp:IsA("BasePart") then
-                    NPCCache[m] = rp
+                    S.NPCCache[m] = rp
                 end
             elseif (m:IsA("Folder") or m:IsA("Model")) and m ~= character then
                 scan(m, depth + 1)
@@ -266,14 +350,14 @@ end
 
 local function IsHostilePlayer(model)
     if not IsPlayerCharacter(model) then return false end
-    return HostilePlayers[model] and (tick() - HostilePlayers[model] < 30)
+    return S.HostilePlayers[model] and (tick() - S.HostilePlayers[model] < 30)
 end
 
 local function MarkHostile(model)
     if not model then return end
-    HostilePlayers[model] = tick()
-    LastAttacker = model
-    LastAttackerTime = tick()
+    S.HostilePlayers[model] = tick()
+    S.LastAttacker = model
+    S.LastAttackerTime = tick()
 end
 
 local function IsAttackingUs(model)
@@ -281,7 +365,7 @@ local function IsAttackingUs(model)
     local rp = model:FindFirstChild("HumanoidRootPart")
     if not rp or not root then return false end
     local tool = model:FindFirstChildOfClass("Tool")
-    local recent = lastAttackTime[model] and (tick() - lastAttackTime[model] < 1.2)
+    local recent = S.lastAttackTime[model] and (tick() - S.lastAttackTime[model] < 1.2)
     if not tool and not recent then return false end
     local d = (rp.Position - root.Position).Magnitude
     if d > 15 then return false end
@@ -291,18 +375,165 @@ local function IsAttackingUs(model)
     return dot > 0.5
 end
 
+local function IsCandyEnemy(model)
+    if not model or not model:IsA("Model") then return false end
+    local n = model.Name
+    return n == "Candy Troll" or n == "Witch Attacker"
+end
+
+local function IsMound(model)
+    if not model or not model:IsA("Model") then return false end
+    return model.Name == "Mound"
+end
+
+local function GetModelRoot(model)
+    if not model then return nil end
+    local r = model:FindFirstChild("HumanoidRootPart")
+    if r then return r end
+    if model.PrimaryPart then return model.PrimaryPart end
+    for _, p in pairs(model:GetChildren()) do
+        if p:IsA("BasePart") then return p end
+    end
+    return nil
+end
+
+local function ScanEntities()
+    local now = tick()
+    if not EntityCache.Dirty and now - EntityCache.LastScan < 0.3 then return end
+    EntityCache.LastScan = now
+    EntityCache.Dirty = false
+
+    local candy, mounds, enemies = {}, {}, {}
+
+    local function scan(container, depth)
+        if depth > 3 then return end
+        for _, obj in pairs(container:GetChildren()) do
+            if obj:IsA("BasePart") then
+                if obj.Name == "CandyCorn" then
+                    candy[#candy + 1] = obj
+                end
+            elseif obj:IsA("Model") then
+                if obj ~= character then
+                    local n = obj.Name
+                    if n == "Mound" then
+                        if IsAlive(obj) then mounds[#mounds + 1] = obj end
+                    elseif n == "Candy Troll" or n == "Witch Attacker" then
+                        if IsAlive(obj) then enemies[#enemies + 1] = obj end
+                    end
+                    scan(obj, depth + 1)
+                end
+            elseif obj:IsA("Folder") then
+                scan(obj, depth + 1)
+            end
+        end
+    end
+    scan(workspace, 0)
+
+    EntityCache.CandyCorn = candy
+    EntityCache.Mounds = mounds
+    EntityCache.CandyEnemies = enemies
+end
+
+local function FindClosestFromList(list)
+    if not root then return nil end
+    local rp = root.Position
+    local maxD2 = C.CandyMaxSearchDist * C.CandyMaxSearchDist
+    local best, bestDist2 = nil, maxD2
+    for i = 1, #list do
+        local obj = list[i]
+        local pos
+        if obj:IsA("BasePart") then
+            pos = obj.Position
+        else
+            local r = obj.PrimaryPart or obj:FindFirstChild("HumanoidRootPart")
+            if r then pos = r.Position end
+        end
+        if pos then
+            local dx = pos.X - rp.X
+            local dy = pos.Y - rp.Y
+            local dz = pos.Z - rp.Z
+            local d2 = dx*dx + dy*dy + dz*dz
+            if d2 < bestDist2 then
+                bestDist2 = d2
+                best = obj
+            end
+        end
+    end
+    return best
+end
+
+local function FindCandyCorn()
+    if not root then return nil end
+    local rp = root.Position
+    local maxD2 = C.CandyMaxSearchDist * C.CandyMaxSearchDist
+    local best, bestDist2 = nil, maxD2
+    local list = EntityCache.CandyCorn
+    local now = tick()
+    for i = 1, #list do
+        local obj = list[i]
+        if obj.Parent then
+            local marked = S.RecentlyCollected[obj]
+            if not marked or (now - marked) >= 3 then
+                local pos = obj.Position
+                local dx = pos.X - rp.X
+                local dy = pos.Y - rp.Y
+                local dz = pos.Z - rp.Z
+                local d2 = dx*dx + dy*dy + dz*dz
+                if d2 < bestDist2 then
+                    bestDist2 = d2
+                    best = obj
+                end
+            end
+        end
+    end
+    return best
+end
+
+local function FindMoundTarget()
+    return FindClosestFromList(EntityCache.Mounds)
+end
+
+local function FindCandyEnemy()
+    return FindClosestFromList(EntityCache.CandyEnemies)
+end
+
+local function GetCandyFarmModelTarget()
+    if C.CandyPriorityEnemies then
+        local enemy = FindCandyEnemy()
+        if enemy then return enemy end
+    end
+    local mound = FindMoundTarget()
+    if mound then return mound end
+    if not C.CandyPriorityEnemies then
+        local enemy = FindCandyEnemy()
+        if enemy then return enemy end
+    end
+    return nil
+end
+
 local function ScoreTarget(model, r)
     if not model or not r then return -math.huge end
     local h = model:FindFirstChildOfClass("Humanoid")
     if not h or h.Health <= 0 then return -math.huge end
 
     local dist = (r.Position - root.Position).Magnitude
-    if dist > Radius or dist > MaxTargetDistance then return -math.huge end
+    if dist > C.Radius or dist > C.MaxTargetDistance then return -math.huge end
 
     local isPlayerChar = IsPlayerCharacter(model)
 
-    if PassivePlayersMode and isPlayerChar then
-        if PassiveRetaliate then
+    if C.CandyFarmEnabled then
+        if IsCandyEnemy(model) then
+            return 100000 - dist
+        end
+        if IsMound(model) then
+            return 50000 - dist
+        end
+        if isPlayerChar and C.CandyIgnorePlayers then return -math.huge end
+        if (not isPlayerChar) and C.CandyIgnoreOtherNPCs then return -math.huge end
+    end
+
+    if C.PassivePlayersMode and isPlayerChar then
+        if C.PassiveRetaliate then
             if not IsHostilePlayer(model) and not IsAttackingUs(model) then
                 return -math.huge
             end
@@ -311,36 +542,36 @@ local function ScoreTarget(model, r)
         end
     end
 
-    if AttackersOnlyMode and not IsAttackingUs(model) and not IsHostilePlayer(model) then
+    if C.AttackersOnlyMode and not IsAttackingUs(model) and not IsHostilePlayer(model) then
         return -math.huge
     end
 
-    if PreferClosestMode or not UseSmartTarget then
+    if C.PreferClosestMode or not C.UseSmartTarget then
         return 10000 - dist
     end
 
     local score = 0
-    score = score + (1000 - dist) * WeightDistance
+    score = score + (1000 - dist) * W.Distance
 
     if isPlayerChar then
-        score = score + WeightPlayer
+        score = score + W.Player
     else
-        score = score + WeightNPC
+        score = score + W.NPC
     end
 
     local hpRatio = h.Health / math.max(h.MaxHealth, 1)
-    score = score + (1 - hpRatio) * WeightLowHP
+    score = score + (1 - hpRatio) * W.LowHP
 
     if hpRatio < 0.5 then
-        score = score + WeightAlreadyHurt
+        score = score + W.AlreadyHurt
     end
 
-    if model == LastAttacker and tick() - LastAttackerTime < 5 then
-        score = score + WeightAttacker
+    if model == S.LastAttacker and tick() - S.LastAttackerTime < 5 then
+        score = score + W.Attacker
     end
 
     if IsHostilePlayer(model) then
-        score = score + WeightAttacker
+        score = score + W.Attacker
     end
 
     local toUs = (root.Position - r.Position)
@@ -348,16 +579,16 @@ local function ScoreTarget(model, r)
         toUs = toUs.Unit
         local facing = r.CFrame.LookVector
         if facing:Dot(toUs) < -0.3 then
-            score = score + WeightBackTurned
+            score = score + W.BackTurned
         end
     end
 
     if model:FindFirstChildOfClass("Tool") then
-        score = score + WeightArmed
+        score = score + W.Armed
     end
 
     if IsAttackingUs(model) then
-        score = score + WeightThreatToMe
+        score = score + W.ThreatToMe
     end
 
     return score
@@ -378,7 +609,7 @@ local function GetTarget()
     end
 
     UpdateNPCCache()
-    for npc, r in pairs(NPCCache) do
+    for npc, r in pairs(S.NPCCache) do
         if r and r.Parent and IsAlive(npc) then
             local sc = ScoreTarget(npc, r)
             if sc > bestScore then bestScore = sc; best = npc end
@@ -420,40 +651,40 @@ local function PredictTargetPosition(target)
     if not r then return nil, 0 end
 
     local now = tick()
-    local pingComp = GetCombinedPing()
+    local pingComp = GetCombinedPing(target)
 
-    table.insert(targetHistory, {pos = r.Position, time = now})
-    while #targetHistory > 12 or (#targetHistory > 0 and now - targetHistory[1].time > 0.5) do
-        table.remove(targetHistory, 1)
+    table.insert(S.targetHistory, {pos = r.Position, time = now})
+    while #S.targetHistory > 12 or (#S.targetHistory > 0 and now - S.targetHistory[1].time > 0.5) do
+        table.remove(S.targetHistory, 1)
     end
 
-    if #targetHistory < 3 then
+    if #S.targetHistory < 3 then
         return r.Position, 0
     end
 
-    local oldest = targetHistory[1]
-    local newest = targetHistory[#targetHistory]
+    local oldest = S.targetHistory[1]
+    local newest = S.targetHistory[#S.targetHistory]
     local dt = newest.time - oldest.time
     if dt < 0.02 then return r.Position, 0 end
 
     local avgVel = (newest.pos - oldest.pos) / dt
 
     local accel = Vector3.zero
-    if #targetHistory >= 3 then
-        local a = targetHistory[#targetHistory - 2]
-        local b = targetHistory[#targetHistory - 1]
-        local c = targetHistory[#targetHistory]
+    if #S.targetHistory >= 3 then
+        local a = S.targetHistory[#S.targetHistory - 2]
+        local b = S.targetHistory[#S.targetHistory - 1]
+        local c = S.targetHistory[#S.targetHistory]
         local v1 = (b.pos - a.pos) / math.max(b.time - a.time, 0.001)
         local v2 = (c.pos - b.pos) / math.max(c.time - b.time, 0.001)
         accel = (v2 - v1) / math.max(c.time - a.time, 0.001)
     end
 
-    local t = pingComp * PredictPingFactor + PredictBaseTime
+    local t = pingComp * C.PredictPingFactor + C.PredictBaseTime
     local predicted = r.Position
-        + avgVel * t * PredictVelocityFactor
-        + accel * (t * t) * PredictAccelFactor
+        + avgVel * t * C.PredictVelocityFactor
+        + accel * (t * t) * C.PredictAccelFactor
 
-    if UseAntiAir then
+    if C.UseAntiAir then
         local th = target:FindFirstChildOfClass("Humanoid")
         if th and th.FloorMaterial == Enum.Material.Air then
             local g = workspace.Gravity
@@ -463,23 +694,23 @@ local function PredictTargetPosition(target)
     end
 
     local offset = predicted - r.Position
-    if offset.Magnitude > PredictMaxDistance then
-        predicted = r.Position + offset.Unit * PredictMaxDistance
+    if offset.Magnitude > C.PredictMaxDistance then
+        predicted = r.Position + offset.Unit * C.PredictMaxDistance
     end
 
     return predicted, avgVel.Magnitude
 end
 
 local function ClearPathDebug()
-    for _, p in ipairs(PathDebugParts) do
+    for _, p in ipairs(S.PathDebugParts) do
         if p and p.Parent then p:Destroy() end
     end
-    PathDebugParts = {}
+    S.PathDebugParts = {}
 end
 
 local function DrawPathDebug(waypoints)
     ClearPathDebug()
-    if not PathDebugEnabled then return end
+    if not C.PathDebugEnabled then return end
     for i, wp in ipairs(waypoints) do
         local part = Instance.new("Part")
         part.Shape = Enum.PartType.Ball
@@ -490,68 +721,68 @@ local function DrawPathDebug(waypoints)
         part.CanCollide = false
         part.Position = wp.Position
         part.Parent = workspace
-        table.insert(PathDebugParts, part)
+        table.insert(S.PathDebugParts, part)
     end
 end
 
 local function ResetPath()
-    if currentPath then
-        pcall(function() currentPath:Destroy() end)
+    if S.currentPath then
+        pcall(function() S.currentPath:Destroy() end)
     end
-    currentPath = nil
-    currentWaypoints = {}
-    currentWaypointIndex = 1
-    lastPathTarget = nil
-    lastPathCompute = 0
+    S.currentPath = nil
+    S.currentWaypoints = {}
+    S.currentWaypointIndex = 1
+    S.lastPathTarget = nil
+    S.lastPathCompute = 0
     ClearPathDebug()
 end
 
 local function ComputePath(startPos, targetPos)
-    if not UsePathfinding then return nil end
+    if not C.UsePathfinding then return nil end
 
     local now = tick()
 
-    if currentPath and currentPath.Status == Enum.PathStatus.Success then
-        local age = now - lastPathCompute
-        local shift = lastPathTarget and (targetPos - lastPathTarget).Magnitude or math.huge
-        local stale = age > PathTimeout
-        local shifted = shift > PathTargetShift
-        local throttled = age < PathRecomputeMin
+    if S.currentPath and S.currentPath.Status == Enum.PathStatus.Success then
+        local age = now - S.lastPathCompute
+        local shift = S.lastPathTarget and (targetPos - S.lastPathTarget).Magnitude or math.huge
+        local stale = age > C.PathTimeout
+        local shifted = shift > C.PathTargetShift
+        local throttled = age < C.PathRecomputeMin
 
         if not stale and not shifted then
-            return currentWaypoints, currentWaypointIndex
+            return S.currentWaypoints, S.currentWaypointIndex
         end
         if throttled and not stale then
-            return currentWaypoints, currentWaypointIndex
+            return S.currentWaypoints, S.currentWaypointIndex
         end
     end
 
-    if currentPath then
-        pcall(function() currentPath:Destroy() end)
-        currentPath = nil
+    if S.currentPath then
+        pcall(function() S.currentPath:Destroy() end)
+        S.currentPath = nil
     end
 
-    lastPathCompute = now
-    lastPathTarget = targetPos
+    S.lastPathCompute = now
+    S.lastPathTarget = targetPos
 
     local path = PathService:CreatePath({
-        AgentRadius = AgentRadius,
-        AgentHeight = AgentHeight,
+        AgentRadius = C.AgentRadius,
+        AgentHeight = C.AgentHeight,
         AgentCanJump = true,
         AgentCanClimb = false,
-        WaypointSpacing = WaypointSpacing,
+        WaypointSpacing = C.WaypointSpacing,
         Costs = { Water = 30 }
     })
 
     local ok = pcall(function() path:ComputeAsync(startPos, targetPos) end)
 
     if ok and path.Status == Enum.PathStatus.Success then
-        currentPath = path
-        currentWaypoints = path:GetWaypoints()
-        currentWaypointIndex = 2
+        S.currentPath = path
+        S.currentWaypoints = path:GetWaypoints()
+        S.currentWaypointIndex = 2
 
         path.Blocked:Connect(function()
-            if tick() - lastPathCompute < PathBlockedCooldown then return end
+            if tick() - S.lastPathCompute < C.PathBlockedCooldown then return end
             ResetPath()
         end)
 
@@ -559,19 +790,19 @@ local function ComputePath(startPos, targetPos)
             ResetPath()
         end)
 
-        DrawPathDebug(currentWaypoints)
-        return currentWaypoints, currentWaypointIndex
+        DrawPathDebug(S.currentWaypoints)
+        return S.currentWaypoints, S.currentWaypointIndex
     end
 
     if ok and path.Status == Enum.PathStatus.NoPath then
         path:Destroy()
-        lastPathTarget = nil
+        S.lastPathTarget = nil
         return nil
     end
 
     if ok and path.Status == Enum.PathStatus.Blocked then
         path:Destroy()
-        lastPathTarget = nil
+        S.lastPathTarget = nil
         return "BLOCKED"
     end
 
@@ -581,20 +812,20 @@ end
 
 local function SmoothMoveTo(hum, targetPos)
     if not hum then return end
-    if not currentMoveTarget then
-        currentMoveTarget = targetPos
-        moveAlpha = 0
+    if not S.currentMoveTarget then
+        S.currentMoveTarget = targetPos
+        S.moveAlpha = 0
     end
-    moveAlpha = math.min(moveAlpha + 0.05, 1)
-    currentMoveTarget = currentMoveTarget:Lerp(targetPos, moveAlpha)
-    hum:MoveTo(currentMoveTarget)
+    S.moveAlpha = math.min(S.moveAlpha + 0.1, 1)
+    S.currentMoveTarget = S.currentMoveTarget:Lerp(targetPos, S.moveAlpha)
+    hum:MoveTo(S.currentMoveTarget)
 end
 
 local function FollowPath(hum, rootPart)
-    if not currentPath or #currentWaypoints == 0 then return false end
-    if currentPath.Status ~= Enum.PathStatus.Success then return false end
+    if not S.currentPath or #S.currentWaypoints == 0 then return false end
+    if S.currentPath.Status ~= Enum.PathStatus.Success then return false end
 
-    local wp = currentWaypoints[currentWaypointIndex]
+    local wp = S.currentWaypoints[S.currentWaypointIndex]
     if not wp then return false end
 
     if wp.Action == Enum.PathWaypointAction.Jump then
@@ -606,11 +837,11 @@ local function FollowPath(hum, rootPart)
     local flatDist = (myFlat - wpFlat).Magnitude
 
     if flatDist < 5 then
-        currentWaypointIndex = currentWaypointIndex + 1
-        if currentWaypointIndex > #currentWaypoints then
+        S.currentWaypointIndex = S.currentWaypointIndex + 1
+        if S.currentWaypointIndex > #S.currentWaypoints then
             return false
         end
-        wp = currentWaypoints[currentWaypointIndex]
+        wp = S.currentWaypoints[S.currentWaypointIndex]
         if not wp then return false end
     end
 
@@ -626,27 +857,27 @@ end
 local function CheckIfStuck()
     if not root or not humanoid then return false end
     local now = tick()
-    local dt = now - lastStuckCheck
-    lastStuckCheck = now
+    local dt = now - S.lastStuckCheck
+    S.lastStuckCheck = now
     if dt > 0.5 then dt = 0.016 end
 
     if humanoid.MoveDirection.Magnitude < 0.1 then
-        stuckTimer = stuckTimer + dt
-        if stuckTimer > 1.5 then return true end
+        S.stuckTimer = S.stuckTimer + dt
+        if S.stuckTimer > 1.5 then return true end
         return false
     end
 
-    table.insert(stuckPositions, root.Position)
-    if #stuckPositions > 20 then table.remove(stuckPositions, 1) end
-    if #stuckPositions < 15 then return false end
+    table.insert(S.stuckPositions, root.Position)
+    if #S.stuckPositions > 20 then table.remove(S.stuckPositions, 1) end
+    if #S.stuckPositions < 15 then return false end
 
-    local dist = (stuckPositions[#stuckPositions] - stuckPositions[1]).Magnitude
+    local dist = (S.stuckPositions[#S.stuckPositions] - S.stuckPositions[1]).Magnitude
     if dist < 3 then
-        stuckTimer = stuckTimer + dt
-        if stuckTimer > 1.0 then return true end
+        S.stuckTimer = S.stuckTimer + dt
+        if S.stuckTimer > 1.0 then return true end
     else
-        stuckTimer = 0
-        stuckAttempts = 0
+        S.stuckTimer = 0
+        S.stuckAttempts = 0
     end
     return false
 end
@@ -654,8 +885,8 @@ end
 local function Unstuck()
     if not root or not humanoid then return end
     ResetPath()
-    stuckAttempts = stuckAttempts + 1
-    if stuckAttempts <= 2 then
+    S.stuckAttempts = S.stuckAttempts + 1
+    if S.stuckAttempts <= 2 then
         humanoid.Jump = true
         task.wait(0.1)
         local ang = math.random(-60, 60)
@@ -663,46 +894,53 @@ local function Unstuck()
         if dir.Magnitude > 0.1 then
             dir = dir.Unit
             humanoid:MoveTo(root.Position + dir * 15)
-            stuckDirection = dir
+            S.stuckDirection = dir
         end
-    elseif stuckAttempts <= 4 then
-        local right = stuckDirection:Cross(Vector3.new(0, 1, 0))
+    elseif S.stuckAttempts <= 4 then
+        local right = S.stuckDirection:Cross(Vector3.new(0, 1, 0))
         if right.Magnitude > 0.1 then
             right = right.Unit
-            local side = (stuckAttempts % 2 == 0) and right or -right
+            local side = (S.stuckAttempts % 2 == 0) and right or -right
             humanoid:MoveTo(root.Position + side * 20)
             humanoid.Jump = true
         end
     else
-        humanoid:MoveTo(root.Position - stuckDirection * 25)
+        humanoid:MoveTo(root.Position - S.stuckDirection * 25)
         humanoid.Jump = true
-        stuckAttempts = 0
+        S.stuckAttempts = 0
     end
-    stuckPositions = {}
-    stuckTimer = 0
+    S.stuckPositions = {}
+    S.stuckTimer = 0
 end
 
 local function CanJump()
     if not humanoid then return false end
-    if humanoid:GetState() == Enum.HumanoidStateType.Jumping then return false end
-    if humanoid:GetState() == Enum.HumanoidStateType.Freefall then return false end
-    if humanoid.FloorMaterial == Enum.Material.Air then return false end
+    local st = humanoid:GetState()
+    if st == Enum.HumanoidStateType.Jumping then return false end
+    if st == Enum.HumanoidStateType.Freefall then return false end
     return true
 end
 
 local function IsObstacleAhead(forwardDist)
-    if not root then return false end
+    if not root or not humanoid then return false end
     local rp = RaycastParams.new()
     rp.FilterDescendantsInstances = {character}
     rp.FilterType = Enum.RaycastFilterType.Blacklist
 
-    local fwd = root.CFrame.LookVector * Vector3.new(1, 0, 1)
+    local fwd
+    local md = humanoid.MoveDirection
+    if md.Magnitude > 0.1 then
+        fwd = md * Vector3.new(1, 0, 1)
+    else
+        fwd = root.CFrame.LookVector * Vector3.new(1, 0, 1)
+    end
     if fwd.Magnitude < 0.1 then return false end
     fwd = fwd.Unit
 
     local origins = {
         root.Position + Vector3.new(0, -2, 0),
         root.Position + Vector3.new(0, 1, 0),
+        root.Position,
     }
     for _, origin in ipairs(origins) do
         local hit = workspace:Raycast(origin, fwd * forwardDist, rp)
@@ -716,39 +954,39 @@ local function RandomJump()
     if not CanJump() then return end
 
     local now = tick()
-    if now - lastJumpTime < jumpCooldown then return end
+    if now - S.lastJumpTime < S.jumpCooldown then return end
 
-    if isStuck then
-        lastJumpTime = now
-        jumpCooldown = math.random(jumpCooldownMin * 10, jumpCooldownMax * 10) / 10
-        humanoid.Jump = true
-        return
+    local doJump = false
+    if S.isStuck then
+        doJump = true
+    elseif IsObstacleAhead(6) then
+        doJump = true
+    elseif math.random(1, 100) <= 25 then
+        doJump = true
     end
 
-    if IsObstacleAhead(5) then
-        lastJumpTime = now
-        jumpCooldown = math.random(jumpCooldownMin * 10, jumpCooldownMax * 10) / 10
+    if doJump then
+        S.lastJumpTime = now
+        S.jumpCooldown = math.random(C.jumpCooldownMin * 10, C.jumpCooldownMax * 10) / 10
         humanoid.Jump = true
     end
 end
 
 local function UpdateFlankMode()
     local now = tick()
-    if now - flankTimer > flankDuration then
-        flankTimer = now
-        if math.random(1, 100) < 30 then
-            flankMode = true
-            flankDuration = math.random(2, 5)
+    if now - S.flankTimer > S.flankDuration then
+        S.flankTimer = now
+        if math.random(1, 100) < 55 then
+            S.flankMode = true
+            S.flankDuration = math.random(1, 3)
         else
-            flankMode = false
-            flankDuration = math.random(3, 6)
+            S.flankMode = false
+            S.flankDuration = math.random(2, 4)
         end
     end
 end
 
 -- I hate this feature, bitch, I spent a lot of time on it Initially, I wrote it much smarter, but it didn't work and I had to turn it into this
-local abilityLoopRunning = false
-
 local function PressAbilityKey(k)
     if not k then return end
     VIM:SendKeyEvent(true, k, false, nil)
@@ -757,34 +995,34 @@ local function PressAbilityKey(k)
 end
 
 local function AbilityLoop()
-    if abilityLoopRunning then return end
-    abilityLoopRunning = true
+    if S.abilityLoopRunning then return end
+    S.abilityLoopRunning = true
     task.spawn(function()
-        while Enabled and Active do
-            if UseAbilities then
-                local keys = AbilityKeysList
+        while C.Enabled and C.Active do
+            if C.UseAbilities then
+                local keys = C.AbilityKeysList
                 if keys and #keys > 0 then
-                    if AbilityMode == "First" then
+                    if C.AbilityMode == "First" then
                         PressAbilityKey(keys[1])
-                    elseif AbilityMode == "All" then
+                    elseif C.AbilityMode == "All" then
                         for _, k in ipairs(keys) do
-                            if not (Enabled and Active) then break end
+                            if not (C.Enabled and C.Active) then break end
                             PressAbilityKey(k)
                             task.wait(0.15)
                         end
                     else
-                        local k = keys[AbilityCycleIndex]
+                        local k = keys[C.AbilityCycleIndex]
                         PressAbilityKey(k)
-                        AbilityCycleIndex = (AbilityCycleIndex % #keys) + 1
+                        C.AbilityCycleIndex = (C.AbilityCycleIndex % #keys) + 1
                     end
                 end
             end
             task.wait(math.random(
-                math.floor(AbilityMinInterval * 10),
-                math.floor(AbilityMaxInterval * 10)
+                math.floor(C.AbilityMinInterval * 10),
+                math.floor(C.AbilityMaxInterval * 10)
             ) / 10)
         end
-        abilityLoopRunning = false
+        S.abilityLoopRunning = false
     end)
 end
 
@@ -806,14 +1044,14 @@ end
 
 local function FindPortal()
     local now = tick()
-    if now - LastPortalSearch < 1 then return PortalCache end
-    LastPortalSearch = now
+    if now - S.LastPortalSearch < 1 then return S.PortalCache end
+    S.LastPortalSearch = now
     local portales = workspace:FindFirstChild("portale")
     if portales then
-        PortalCache = portales
+        S.PortalCache = portales
         return portales
     end
-    PortalCache = nil
+    S.PortalCache = nil
     return nil
 end
 
@@ -845,24 +1083,24 @@ local function PredictEnemyAttackLanding(enemyChar)
     if dir.Magnitude < 0.01 then return nil end
     dir = dir.Unit
     local dist = (root.Position - erp.Position).Magnitude
-    local pingComp = GetCombinedPing()
+    local pingComp = GetCombinedPing(enemyChar)
     local enemyVel = erp.AssemblyLinearVelocity or Vector3.zero
-    local proj = dir * dist + enemyVel * (pingComp + DodgeReaction)
+    local proj = dir * dist + enemyVel * (pingComp + C.DodgeReaction)
     return erp.Position + proj
 end
 
 local function OnEnemyAttack(enemyChar)
-    if not UseDodge then return end
+    if not C.UseDodge then return end
     if not character or not root or not humanoid then return end
-    if tick() - dodgeLastTrigger < DodgeCooldown then return end
+    if tick() - S.dodgeLastTrigger < C.DodgeCooldown then return end
 
     MarkHostile(enemyChar)
-    lastAttackTime[enemyChar] = tick()
+    S.lastAttackTime[enemyChar] = tick()
 
     local erp = enemyChar and enemyChar:FindFirstChild("HumanoidRootPart")
     if not erp then return end
     local d = (erp.Position - root.Position).Magnitude
-    if d > DodgeRange then return end
+    if d > C.DodgeRange then return end
 
     local toUs = (root.Position - erp.Position)
     if toUs.Magnitude < 0.01 then return end
@@ -902,15 +1140,15 @@ local function OnEnemyAttack(enemyChar)
     end
 
     local side = (math.random() < 0.5) and 1 or -1
-    dodgeDir = (perp * side * 0.95 - incomingDir * 0.25).Unit
-    dodgeEndTime = tick() + DodgeDuration
-    dodgeLastTrigger = tick()
-    dodgeThreatVel = incomingVel
+    S.dodgeDir = (perp * side * 0.95 - incomingDir * 0.25).Unit
+    S.dodgeEndTime = tick() + C.DodgeDuration
+    S.dodgeLastTrigger = tick()
+    S.dodgeThreatVel = incomingVel
 end
 
 local function WatchEnemy(ec)
-    if not ec or watchedModels[ec] then return end
-    watchedModels[ec] = {}
+    if not ec or S.watchedModels[ec] then return end
+    S.watchedModels[ec] = {}
 
     local function bindTool(child)
         if child:IsA("Tool") then
@@ -918,30 +1156,30 @@ local function WatchEnemy(ec)
                 if child.Enabled then OnEnemyAttack(ec) end
             end)
             local connActivated = child.Activated:Connect(function()
-                lastAttackTime[ec] = tick()
+                S.lastAttackTime[ec] = tick()
                 OnEnemyAttack(ec)
             end)
-            table.insert(watchedModels[ec], connEnabled)
-            table.insert(watchedModels[ec], connActivated)
+            table.insert(S.watchedModels[ec], connEnabled)
+            table.insert(S.watchedModels[ec], connActivated)
         end
     end
 
     for _, child in pairs(ec:GetChildren()) do bindTool(child) end
-    table.insert(watchedModels[ec], ec.ChildAdded:Connect(bindTool))
+    table.insert(S.watchedModels[ec], ec.ChildAdded:Connect(bindTool))
 end
 
 local function UnwatchEnemy(ec)
-    local conns = watchedModels[ec]
+    local conns = S.watchedModels[ec]
     if not conns then return end
     for _, c in pairs(conns) do pcall(function() c:Disconnect() end) end
-    watchedModels[ec] = nil
+    S.watchedModels[ec] = nil
 end
 
 local function ApplyDodge(hum)
-    if tick() >= dodgeEndTime then return false end
+    if tick() >= S.dodgeEndTime then return false end
     if not root then return false end
 
-    local target = root.Position + dodgeDir * 22
+    local target = root.Position + S.dodgeDir * 22
 
     local checkParams = RaycastParams.new()
     checkParams.FilterDescendantsInstances = {character}
@@ -949,11 +1187,11 @@ local function ApplyDodge(hum)
     local hit = workspace:Raycast(root.Position + Vector3.new(0, 2, 0),
         (target - root.Position).Unit * 22, checkParams)
     if hit then
-        target = root.Position + dodgeDir * (hit.Distance - 2)
+        target = root.Position + S.dodgeDir * (hit.Distance - 2)
     end
 
     hum:MoveTo(target)
-    if hum.FloorMaterial ~= Enum.Material.Air and math.random(1, 2) == 1 then
+    if math.random(1, 100) <= 70 then
         hum.Jump = true
     end
     return true
@@ -994,7 +1232,7 @@ local function FindBest(tool, part, predictedPos)
     rp.FilterType = Enum.RaycastFilterType.Blacklist
     rp.FilterDescendantsInstances = {character, part.Parent}
 
-    if UseAimAssist then
+    if C.UseAimAssist then
         for _, off in ipairs(offsets) do
             local check = aimPos + off
             local dir = (check - swordTip)
@@ -1022,21 +1260,58 @@ local function FindBest(tool, part, predictedPos)
     return nil
 end
 
+local function TryPickupCandy()
+    if not root or not humanoid then return false end
+    local candy = FindCandyCorn()
+    if not candy or not candy.Parent then
+        S.CurrentCandyTarget = nil
+        return false
+    end
+
+    local candyPos = candy.Position
+    local d = (candyPos - root.Position).Magnitude
+    if d > C.CandyPickupRadius then
+        S.CurrentCandyTarget = nil
+        return false
+    end
+
+    S.CurrentCandyTarget = candy
+    DisableGyro()
+    ResetPath()
+    S.currentMoveTarget = nil
+
+    if d <= C.CandyForcePickupDist then
+        S.RecentlyCollected[candy] = tick()
+        pcall(function() firetouchinterest(root, candy, 0) end)
+        pcall(function() firetouchinterest(root, candy, 1) end)
+        S.LastCandyTouch = tick()
+        return true
+    end
+
+    SmoothMoveTo(humanoid, candyPos)
+    return true
+end
+
 local function CombotBotLoop()
-    if not Active or not character or not root or not humanoid then return end
+    if not C.Active or not character or not root or not humanoid then return end
 
-    UpdateServerPing()
-
-    if RequireToolMode and not HasTool() then
+    if C.RequireToolMode and not HasTool() then
         DisableGyro()
-        currentMoveTarget = nil
+        S.currentMoveTarget = nil
         return
     end
 
-    if tick() < PortalPauseUntil then
+    if tick() < S.PortalPauseUntil then
         DisableGyro()
-        currentMoveTarget = nil
+        S.currentMoveTarget = nil
         return
+    end
+
+    if C.CandyFarmEnabled then
+        ScanEntities()
+        if TryPickupCandy() then
+            return
+        end
     end
 
     local hpRatio = humanoid.Health / math.max(humanoid.MaxHealth, 1)
@@ -1053,7 +1328,8 @@ local function CombotBotLoop()
     end
     if threatCount > 0 then threatCenter = threatCenter / threatCount end
 
-    if UseRetreat and ((hpRatio < RetreatHPThreshold and threatCount >= 1) or threatCount >= MultiThreatCount) then
+    if C.UseRetreat and
+       ((hpRatio < C.RetreatHPThreshold and threatCount >= 1) or threatCount >= C.MultiThreatCount) then
         local fleeDir
         if threatCount > 0 then
             fleeDir = (root.Position - threatCenter) * Vector3.new(1, 0, 1)
@@ -1076,34 +1352,95 @@ local function CombotBotLoop()
             local tr = t:FindFirstChild("HumanoidRootPart")
             if tr then
                 EnableGyro()
-                bodyGyro.CFrame = CFrame.new(root.Position,
-                    Vector3.new(tr.Position.X, root.Position.Y, tr.Position.Z))
+                SetFacing(CFrame.new(root.Position,
+                    Vector3.new(tr.Position.X, root.Position.Y, tr.Position.Z)))
             end
         end
         return
     end
 
-    local target = GetTarget()
+    local target
+    if C.CandyFarmEnabled then
+        target = GetCandyFarmModelTarget()
+        if not target then
+            DisableGyro()
+            S.currentMoveTarget = nil
+            return
+        end
+    else
+        target = GetTarget()
+    end
+
     if not target then
         DisableGyro()
-        currentMoveTarget = nil
-        lastTargetRef = nil
-        targetHistory = {}
+        S.currentMoveTarget = nil
+        S.lastTargetRef = nil
+        S.targetHistory = {}
         return
     end
 
-    if target ~= lastTargetRef then
-        targetHistory = {}
-        lastTargetRef = target
+    if target ~= S.lastTargetRef then
+        S.targetHistory = {}
+        S.lastTargetRef = target
     end
 
     local h = target:FindFirstChildOfClass("Humanoid")
     local r = target:FindFirstChild("HumanoidRootPart")
-    if not h or not r then
+    if not r then
+        r = GetModelRoot(target)
+    end
+    if not r then
         DisableGyro()
-        currentMoveTarget = nil
-        lastTargetRef = nil
-        targetHistory = {}
+        S.currentMoveTarget = nil
+        S.lastTargetRef = nil
+        S.targetHistory = {}
+        return
+    end
+
+    if not h then
+        EnableGyro()
+        humanoid.AutoRotate = false
+
+        local moundHb = 2
+        if r then
+            moundHb = math.max(r.Size.X, r.Size.Y, r.Size.Z) / 2
+        end
+        local myHb = GetMyHitboxSize()
+        local optimalDist = C.AttackDistance + moundHb + myHb
+        if optimalDist < 2.5 then optimalDist = 2.5 end
+
+        local dirToTarget = (r.Position - root.Position) * Vector3.new(1, 0, 1)
+        if dirToTarget.Magnitude < 0.1 then
+            dirToTarget = Vector3.new(1, 0, 0)
+        else
+            dirToTarget = dirToTarget.Unit
+        end
+        SetFacing(CFrame.new(root.Position, root.Position + dirToTarget))
+
+        local d = (r.Position - root.Position).Magnitude
+        local approachDist = optimalDist * 0.85
+        if approachDist < 2 then approachDist = 2 end
+
+        if d > approachDist + 0.5 then
+            ResetPath()
+            S.currentMoveTarget = nil
+            local targetPos = r.Position - dirToTarget * approachDist
+            SmoothMoveTo(humanoid, targetPos)
+        else
+            ResetPath()
+            S.currentMoveTarget = nil
+            local tool = character:FindFirstChildOfClass("Tool")
+            if tool then
+                local now = tick()
+                if now - (S.lastMoundAttack or 0) > 0.4 then
+                    S.lastMoundAttack = now
+                    tool:Activate()
+                end
+            end
+            if humanoid and not humanoid.AutoRotate then
+                SetFacing(CFrame.new(root.Position, root.Position + dirToTarget))
+            end
+        end
         return
     end
 
@@ -1119,7 +1456,7 @@ local function CombotBotLoop()
     humanoid.AutoRotate = false
 
     local tool = character:FindFirstChildOfClass("Tool")
-    if autoEquip and not tool then
+    if C.autoEquip and not tool then
         local bt = player.Backpack:FindFirstChildOfClass("Tool")
         if bt then
             humanoid:EquipTool(bt)
@@ -1130,15 +1467,15 @@ local function CombotBotLoop()
 
     UseAbility((root.Position - r.Position).Magnitude, target)
 
-    isStuck = CheckIfStuck()
-    if isStuck then Unstuck(); return end
+    S.isStuck = CheckIfStuck()
+    if S.isStuck then Unstuck(); return end
 
     local predictedPos, targetSpeed = PredictTargetPosition(target)
     if not predictedPos then predictedPos = r.Position end
 
     local enemyHb = GetEnemyHitboxSize(target)
     local myHb    = GetMyHitboxSize()
-    local optimalDist = AttackDistance + enemyHb + myHb
+    local optimalDist = C.AttackDistance + enemyHb + myHb
 
     local dist = (root.Position - r.Position).Magnitude
     local heightDiff = r.Position.Y - root.Position.Y
@@ -1152,17 +1489,24 @@ local function CombotBotLoop()
     if targetSpeed > 5 then adj = optimalDist * 0.85
     elseif targetSpeed < 2 then adj = optimalDist * 0.7 end
 
-    if UseDodge and ApplyDodge(humanoid) then
-        DisableGyro()
-        bodyGyro.CFrame = CFrame.new(root.Position, root.Position + dodgeDir)
+    local faceCF = bestCFrame or CFrame.new(root.Position, root.Position + dirToTarget)
+    SetFacing(faceCF)
+
+    if C.UseDodge and ApplyDodge(humanoid) then
+        SetFacing(CFrame.new(root.Position, root.Position + S.dodgeDir))
         return
     end
 
     UpdateFlankMode()
 
     local movePos = nil
-    if flankMode then
-        movePos = predictedPos - r.CFrame.LookVector * (adj * 0.8)
+    if S.flankMode then
+        local behindPos = r.Position + r.CFrame.LookVector * (adj * 1.1)
+        if math.random(1, 100) <= 30 and CanJump() and tick() - S.lastJumpTime > 0.5 then
+            humanoid.Jump = true
+            S.lastJumpTime = tick()
+        end
+        movePos = behindPos
     elseif dist > adj * 1.2 then
         local approach = predictedPos - dirToTarget * (adj * 0.9)
         approach = Vector3.new(approach.X, root.Position.Y + heightDiff * 0.3, approach.Z)
@@ -1176,13 +1520,23 @@ local function CombotBotLoop()
         circle = circle.Unit:Cross(Vector3.new(0, 1, 0))
         if circle.Magnitude < 0.1 then circle = Vector3.new(1, 0, 0) end
 
-        local strafeDist = 6 + StrafeAmount * 2
+        local strafeDist = 6 + C.StrafeAmount * 2
         local rand = Vector3.new(
-            (math.random() - 0.5) * StrafeAmount,
+            (math.random() - 0.5) * C.StrafeAmount,
             0,
-            (math.random() - 0.5) * StrafeAmount
+            (math.random() - 0.5) * C.StrafeAmount
         )
         movePos = predictedPos + circle * strafeDist + rand
+
+        if math.random(1, 100) <= 25 and tick() - S.lastJumpTime > 0.8 then
+            local sideDir = circle * (1 + math.random() * 1.5)
+            movePos = root.Position + sideDir * strafeDist + rand
+            if CanJump() then
+                humanoid.Jump = true
+                S.lastJumpTime = tick()
+                S.jumpCooldown = math.random(C.jumpCooldownMin * 10, C.jumpCooldownMax * 10) / 10
+            end
+        end
     end
 
     if movePos then
@@ -1197,7 +1551,7 @@ local function CombotBotLoop()
             local wps = ComputePath(root.Position, movePos)
             if wps == "BLOCKED" then
                 ResetPath()
-                currentMoveTarget = nil
+                S.currentMoveTarget = nil
                 DisableGyro()
                 return
             elseif wps then
@@ -1208,20 +1562,21 @@ local function CombotBotLoop()
                     SmoothMoveTo(humanoid, movePos)
                 else
                     DisableGyro()
-                    currentMoveTarget = nil
+                    S.currentMoveTarget = nil
                     return
                 end
             end
         end
     end
 
+    if humanoid and not humanoid.AutoRotate then
+        SetFacing(faceCF)
+    end
+
     RandomJump()
 
-    if bestCFrame then bodyGyro.CFrame = bestCFrame
-    else bodyGyro.CFrame = CFrame.new(root.Position, root.Position + dirToTarget) end
-
     local shouldAttack = false
-    if tool or not RequireToolMode then
+    if tool or not C.RequireToolMode then
         local lookDir = root.CFrame.LookVector
         local toTarget = (r.Position - root.Position)
         if toTarget.Magnitude > 0.01 then
@@ -1247,17 +1602,18 @@ end
 
 local function StopBot()
     ResetPath()
-    currentMoveTarget = nil
-    stuckPositions = {}
-    stuckTimer = 0
-    isStuck = false
-    flankMode = false
-    lastJumpTime = 0
-    targetHistory = {}
-    lastTargetRef = nil
-    dodgeEndTime = 0
+    S.currentMoveTarget = nil
+    S.stuckPositions = {}
+    S.stuckTimer = 0
+    S.isStuck = false
+    S.flankMode = false
+    S.lastJumpTime = 0
+    S.targetHistory = {}
+    S.lastTargetRef = nil
+    S.dodgeEndTime = 0
+    S.CurrentCandyTarget = nil
     DisableGyro()
-    if humanoid then humanoid.WalkSpeed = DefaultWalkSpeed end
+    if humanoid then humanoid.WalkSpeed = S.DefaultWalkSpeed end
     ClearPathDebug()
 end
 
@@ -1274,7 +1630,7 @@ local function HookHealthTracker()
                 if r then
                     local dist = (r.Position - root.Position).Magnitude
                     local armed = ch:FindFirstChildOfClass("Tool") ~= nil
-                    local recent = lastAttackTime[ch] and (now - lastAttackTime[ch] < 1.2)
+                    local recent = S.lastAttackTime[ch] and (now - S.lastAttackTime[ch] < 1.2)
                     local toUs = (root.Position - r.Position)
                     local facingDot = 0
                     if toUs.Magnitude > 0.01 then
@@ -1293,9 +1649,11 @@ local MainTab    = Window:CreateTab("CombotBot", 4483362458)
 local TargetTab  = Window:CreateTab("Targeting", 4483362458)
 local AdvTab     = Window:CreateTab("Advanced",  4483362458)
 local DodgeTab   = Window:CreateTab("Dodge & Predict", 4483362458)
+local PingTab    = Window:CreateTab("Ping System", 4483362458)
 local PortalTab  = Window:CreateTab("Portal", 4483362458)
 local AbilityTab = Window:CreateTab("Abilities", 4483362458)
 local ModsTab    = Window:CreateTab("Modifications", 4483362458)
+local CandyTab   = Window:CreateTab("Candy Farm", 4483362458)
 local DebugTab   = Window:CreateTab("Debug", 4483362458)
 
 MainTab:CreateSection("Master")
@@ -1304,8 +1662,8 @@ MainTab:CreateToggle({
     CurrentValue = false,
     Flag = "BotEnabled",
     Callback = function(v)
-        Enabled = v
-        if not v then Active = false; StopBot() end
+        C.Enabled = v
+        if not v then C.Active = false; StopBot() end
     end
 })
 MainTab:CreateLabel("Press U to toggle Active / Idle")
@@ -1315,19 +1673,19 @@ MainTab:CreateSlider({
     Name = "Attack Distance",
     Range = {5, 40}, Increment = 1, Suffix = " studs",
     CurrentValue = 12, Flag = "AttackDist",
-    Callback = function(v) AttackDistance = v end
+    Callback = function(v) C.AttackDistance = v end
 })
 MainTab:CreateSlider({
     Name = "Strafe Amount",
     Range = {1, 5}, Increment = 1, Suffix = "",
     CurrentValue = 1, Flag = "Strafe",
-    Callback = function(v) StrafeAmount = v end
+    Callback = function(v) C.StrafeAmount = v end
 })
 MainTab:CreateToggle({
     Name = "Auto Equip Tool",
     CurrentValue = true,
     Flag = "AutoEquip",
-    Callback = function(v) autoEquip = v end
+    Callback = function(v) C.autoEquip = v end
 })
 
 MainTab:CreateSection("Requirements")
@@ -1335,13 +1693,13 @@ MainTab:CreateToggle({
     Name = "Require Tool In Inventory",
     CurrentValue = true,
     Flag = "RequireTool",
-    Callback = function(v) RequireToolMode = v end
+    Callback = function(v) C.RequireToolMode = v end
 })
 MainTab:CreateToggle({
     Name = "Stay Enabled After Death",
     CurrentValue = true,
     Flag = "PersistDeath",
-    Callback = function(v) PersistOnDeath = v end
+    Callback = function(v) C.PersistOnDeath = v end
 })
 
 TargetTab:CreateSection("Modes")
@@ -1349,19 +1707,19 @@ TargetTab:CreateToggle({
     Name = "Enable Smart Target Scoring",
     CurrentValue = true,
     Flag = "SmartTarget",
-    Callback = function(v) UseSmartTarget = v end
+    Callback = function(v) C.UseSmartTarget = v end
 })
 TargetTab:CreateToggle({
     Name = "Attackers Only Mode",
     CurrentValue = false,
     Flag = "AttackersOnly",
-    Callback = function(v) AttackersOnlyMode = v end
+    Callback = function(v) C.AttackersOnlyMode = v end
 })
 TargetTab:CreateToggle({
     Name = "Always Closest Mode",
     CurrentValue = false,
     Flag = "ClosestOnly",
-    Callback = function(v) PreferClosestMode = v end
+    Callback = function(v) C.PreferClosestMode = v end
 })
 
 TargetTab:CreateSection("Ranges")
@@ -1369,44 +1727,44 @@ TargetTab:CreateSlider({
     Name = "Target Radius",
     Range = {10, 1000}, Increment = 10, Suffix = " studs",
     CurrentValue = 500, Flag = "Radius",
-    Callback = function(v) Radius = v end
+    Callback = function(v) C.Radius = v end
 })
 TargetTab:CreateSlider({
     Name = "Max Target Distance",
     Range = {10, 1000}, Increment = 10, Suffix = " studs",
     CurrentValue = 500, Flag = "MaxTargetDist",
-    Callback = function(v) MaxTargetDistance = v end
+    Callback = function(v) C.MaxTargetDistance = v end
 })
 
 TargetTab:CreateSection("Score Weights")
-TargetTab:CreateSlider({ Name="Distance Weight", Range={0,300}, Increment=10, Suffix=" %", CurrentValue=100, Flag="WDistance", Callback=function(v) WeightDistance = v/100 end })
-TargetTab:CreateSlider({ Name="Low HP Weight", Range={0,2000}, Increment=50, Suffix="", CurrentValue=800, Flag="WLowHP", Callback=function(v) WeightLowHP = v end })
-TargetTab:CreateSlider({ Name="Player Weight", Range={0,2000}, Increment=50, Suffix="", CurrentValue=500, Flag="WPlayer", Callback=function(v) WeightPlayer = v end })
-TargetTab:CreateSlider({ Name="Attacker Weight", Range={0,5000}, Increment=100, Suffix="", CurrentValue=2000, Flag="WAttacker", Callback=function(v) WeightAttacker = v end })
-TargetTab:CreateSlider({ Name="Armed Weight", Range={0,1000}, Increment=50, Suffix="", CurrentValue=150, Flag="WArmed", Callback=function(v) WeightArmed = v end })
-TargetTab:CreateSlider({ Name="Back-Turned Weight", Range={0,1500}, Increment=50, Suffix="", CurrentValue=300, Flag="WBackTurned", Callback=function(v) WeightBackTurned = v end })
-TargetTab:CreateSlider({ Name="Threat-To-Me Weight", Range={0,2000}, Increment=50, Suffix="", CurrentValue=400, Flag="WThreat", Callback=function(v) WeightThreatToMe = v end })
-TargetTab:CreateSlider({ Name="Already Hurt Weight", Range={0,1500}, Increment=50, Suffix="", CurrentValue=250, Flag="WHurt", Callback=function(v) WeightAlreadyHurt = v end })
-TargetTab:CreateSlider({ Name="NPC Weight", Range={-1000,1000}, Increment=50, Suffix="", CurrentValue=0, Flag="WNPC", Callback=function(v) WeightNPC = v end })
+TargetTab:CreateSlider({ Name="Distance Weight", Range={0,300}, Increment=10, Suffix=" %", CurrentValue=100, Flag="WDistance", Callback=function(v) W.Distance = v/100 end })
+TargetTab:CreateSlider({ Name="Low HP Weight", Range={0,2000}, Increment=50, Suffix="", CurrentValue=800, Flag="WLowHP", Callback=function(v) W.LowHP = v end })
+TargetTab:CreateSlider({ Name="Player Weight", Range={0,2000}, Increment=50, Suffix="", CurrentValue=500, Flag="WPlayer", Callback=function(v) W.Player = v end })
+TargetTab:CreateSlider({ Name="Attacker Weight", Range={0,5000}, Increment=100, Suffix="", CurrentValue=2000, Flag="WAttacker", Callback=function(v) W.Attacker = v end })
+TargetTab:CreateSlider({ Name="Armed Weight", Range={0,1000}, Increment=50, Suffix="", CurrentValue=150, Flag="WArmed", Callback=function(v) W.Armed = v end })
+TargetTab:CreateSlider({ Name="Back-Turned Weight", Range={0,1500}, Increment=50, Suffix="", CurrentValue=300, Flag="WBackTurned", Callback=function(v) W.BackTurned = v end })
+TargetTab:CreateSlider({ Name="Threat-To-Me Weight", Range={0,2000}, Increment=50, Suffix="", CurrentValue=400, Flag="WThreat", Callback=function(v) W.ThreatToMe = v end })
+TargetTab:CreateSlider({ Name="Already Hurt Weight", Range={0,1500}, Increment=50, Suffix="", CurrentValue=250, Flag="WHurt", Callback=function(v) W.AlreadyHurt = v end })
+TargetTab:CreateSlider({ Name="NPC Weight", Range={-1000,1000}, Increment=50, Suffix="", CurrentValue=0, Flag="WNPC", Callback=function(v) W.NPC = v end })
 
 AdvTab:CreateSection("Pathfinding")
 AdvTab:CreateToggle({
     Name = "Use PathfindingService",
     CurrentValue = true,
     Flag = "Pathfinding",
-    Callback = function(v) UsePathfinding = v; if not v then ResetPath() end end
+    Callback = function(v) C.UsePathfinding = v; if not v then ResetPath() end end
 })
-AdvTab:CreateSlider({ Name="Agent Radius", Range={5,60}, Increment=1, Suffix=" /10", CurrentValue=25, Flag="AgentR", Callback=function(v) AgentRadius = v/10 end })
-AdvTab:CreateSlider({ Name="Agent Height", Range={30,100}, Increment=1, Suffix=" /10", CurrentValue=55, Flag="AgentH", Callback=function(v) AgentHeight = v/10 end })
-AdvTab:CreateSlider({ Name="Waypoint Spacing", Range={2,20}, Increment=1, Suffix="", CurrentValue=5, Flag="WPSpace", Callback=function(v) WaypointSpacing = v end })
-AdvTab:CreateSlider({ Name="Path Timeout", Range={5,40}, Increment=1, Suffix=" /10s", CurrentValue=15, Flag="PathTO", Callback=function(v) PathTimeout = v/10 end })
-AdvTab:CreateSlider({ Name="Path Target Shift", Range={2,40}, Increment=1, Suffix=" studs", CurrentValue=10, Flag="PathShift", Callback=function(v) PathTargetShift = v end })
+AdvTab:CreateSlider({ Name="Agent Radius", Range={5,60}, Increment=1, Suffix=" /10", CurrentValue=25, Flag="AgentR", Callback=function(v) C.AgentRadius = v/10 end })
+AdvTab:CreateSlider({ Name="Agent Height", Range={30,100}, Increment=1, Suffix=" /10", CurrentValue=55, Flag="AgentH", Callback=function(v) C.AgentHeight = v/10 end })
+AdvTab:CreateSlider({ Name="Waypoint Spacing", Range={2,20}, Increment=1, Suffix="", CurrentValue=5, Flag="WPSpace", Callback=function(v) C.WaypointSpacing = v end })
+AdvTab:CreateSlider({ Name="Path Timeout", Range={5,40}, Increment=1, Suffix=" /10s", CurrentValue=15, Flag="PathTO", Callback=function(v) C.PathTimeout = v/10 end })
+AdvTab:CreateSlider({ Name="Path Target Shift", Range={2,40}, Increment=1, Suffix=" studs", CurrentValue=10, Flag="PathShift", Callback=function(v) C.PathTargetShift = v end })
 AdvTab:CreateToggle({
     Name = "Show Path Waypoints (Debug)",
     CurrentValue = false,
     Flag = "PathDebug",
     Callback = function(v)
-        PathDebugEnabled = v
+        C.PathDebugEnabled = v
         if not v then ClearPathDebug() end
     end
 })
@@ -1416,13 +1774,13 @@ AdvTab:CreateToggle({
     Name = "Aim-Assist (Raycast)",
     CurrentValue = true,
     Flag = "AimAssist",
-    Callback = function(v) UseAimAssist = v end
+    Callback = function(v) C.UseAimAssist = v end
 })
 AdvTab:CreateToggle({
     Name = "Anti-Air Prediction",
     CurrentValue = true,
     Flag = "AntiAir",
-    Callback = function(v) UseAntiAir = v end
+    Callback = function(v) C.UseAntiAir = v end
 })
 
 AdvTab:CreateSection("Self Preservation")
@@ -1430,54 +1788,109 @@ AdvTab:CreateToggle({
     Name = "Retreat When Low HP / Outnumbered",
     CurrentValue = true,
     Flag = "Retreat",
-    Callback = function(v) UseRetreat = v end
+    Callback = function(v) C.UseRetreat = v end
 })
-AdvTab:CreateSlider({ Name="Retreat HP Threshold", Range={5,80}, Increment=5, Suffix="%", CurrentValue=35, Flag="RetreatHP", Callback=function(v) RetreatHPThreshold = v/100 end })
-AdvTab:CreateSlider({ Name="Multi-Threat Count", Range={2,8}, Increment=1, Suffix="", CurrentValue=3, Flag="MultiThreat", Callback=function(v) MultiThreatCount = v end })
+AdvTab:CreateSlider({ Name="Retreat HP Threshold", Range={5,80}, Increment=5, Suffix="%", CurrentValue=35, Flag="RetreatHP", Callback=function(v) C.RetreatHPThreshold = v/100 end })
+AdvTab:CreateSlider({ Name="Multi-Threat Count", Range={2,8}, Increment=1, Suffix="", CurrentValue=3, Flag="MultiThreat", Callback=function(v) C.MultiThreatCount = v end })
 
 DodgeTab:CreateSection("Dodge")
 DodgeTab:CreateToggle({
     Name = "Enable Dodge",
     CurrentValue = true,
     Flag = "DodgeToggle",
-    Callback = function(v) UseDodge = v end
+    Callback = function(v) C.UseDodge = v end
 })
-DodgeTab:CreateSlider({ Name="Dodge Range", Range={10,60}, Increment=1, Suffix=" studs", CurrentValue=22, Flag="DodgeRange", Callback=function(v) DodgeRange = v end })
-DodgeTab:CreateSlider({ Name="Dodge Cooldown", Range={10,150}, Increment=5, Suffix=" s", CurrentValue=55, Flag="DodgeCD", Callback=function(v) DodgeCooldown = v/100 end })
-DodgeTab:CreateSlider({ Name="Dodge Duration", Range={5,100}, Increment=5, Suffix=" s", CurrentValue=28, Flag="DodgeDur", Callback=function(v) DodgeDuration = v/100 end })
-DodgeTab:CreateSlider({ Name="Reaction Delay", Range={0,50}, Increment=1, Suffix=" s", CurrentValue=10, Flag="DodgeReact", Callback=function(v) DodgeReaction = v/100 end })
+DodgeTab:CreateSlider({ Name="Dodge Range", Range={10,60}, Increment=1, Suffix=" studs", CurrentValue=22, Flag="DodgeRange", Callback=function(v) C.DodgeRange = v end })
+DodgeTab:CreateSlider({ Name="Dodge Cooldown", Range={10,150}, Increment=5, Suffix=" s", CurrentValue=55, Flag="DodgeCD", Callback=function(v) C.DodgeCooldown = v/100 end })
+DodgeTab:CreateSlider({ Name="Dodge Duration", Range={5,100}, Increment=5, Suffix=" s", CurrentValue=28, Flag="DodgeDur", Callback=function(v) C.DodgeDuration = v/100 end })
+DodgeTab:CreateSlider({ Name="Reaction Delay", Range={0,50}, Increment=1, Suffix=" s", CurrentValue=10, Flag="DodgeReact", Callback=function(v) C.DodgeReaction = v/100 end })
 
 DodgeTab:CreateSection("Prediction")
-DodgeTab:CreateToggle({ Name="Use Server Ping (RTT)", CurrentValue=true, Flag="UseServerPing", Callback=function(v) UseServerPing = v end })
-DodgeTab:CreateSlider({ Name="Velocity Factor", Range={0,300}, Increment=10, Suffix=" %", CurrentValue=100, Flag="PredVel", Callback=function(v) PredictVelocityFactor = v/100 end })
-DodgeTab:CreateSlider({ Name="Acceleration Factor", Range={0,300}, Increment=10, Suffix=" %", CurrentValue=50, Flag="PredAcc", Callback=function(v) PredictAccelFactor = v/100 end })
-DodgeTab:CreateSlider({ Name="Ping Factor", Range={0,200}, Increment=10, Suffix=" %", CurrentValue=70, Flag="PredPing", Callback=function(v) PredictPingFactor = v/100 end })
-DodgeTab:CreateSlider({ Name="Base Lead Time", Range={0,40}, Increment=1, Suffix=" s", CurrentValue=8, Flag="PredBase", Callback=function(v) PredictBaseTime = v/100 end })
-DodgeTab:CreateSlider({ Name="Max Predicted Offset", Range={5,100}, Increment=1, Suffix=" studs", CurrentValue=25, Flag="PredMax", Callback=function(v) PredictMaxDistance = v end })
+DodgeTab:CreateToggle({ Name="Use Server Ping (RTT)", CurrentValue=true, Flag="UseServerPing", Callback=function(v) C.UseServerPing = v end })
+DodgeTab:CreateToggle({ Name="Use Target Ping (per-player)", CurrentValue=true, Flag="UseTargetPing", Callback=function(v) C.UseTargetPing = v end })
+DodgeTab:CreateSlider({ Name="Velocity Factor", Range={0,300}, Increment=10, Suffix=" %", CurrentValue=100, Flag="PredVel", Callback=function(v) C.PredictVelocityFactor = v/100 end })
+DodgeTab:CreateSlider({ Name="Acceleration Factor", Range={0,300}, Increment=10, Suffix=" %", CurrentValue=50, Flag="PredAcc", Callback=function(v) C.PredictAccelFactor = v/100 end })
+DodgeTab:CreateSlider({ Name="Ping Factor", Range={0,200}, Increment=10, Suffix=" %", CurrentValue=70, Flag="PredPing", Callback=function(v) C.PredictPingFactor = v/100 end })
+DodgeTab:CreateSlider({ Name="Base Lead Time", Range={0,40}, Increment=1, Suffix=" s", CurrentValue=8, Flag="PredBase", Callback=function(v) C.PredictBaseTime = v/100 end })
+DodgeTab:CreateSlider({ Name="Max Predicted Offset", Range={5,100}, Increment=1, Suffix=" studs", CurrentValue=25, Flag="PredMax", Callback=function(v) C.PredictMaxDistance = v end })
+
+PingTab:CreateSection("Ping System")
+PingTab:CreateToggle({
+    Name = "Use Server Ping (RTT) in Prediction",
+    CurrentValue = true,
+    Flag = "PingUseServer",
+    Callback = function(v) C.UseServerPing = v end
+})
+PingTab:CreateToggle({
+    Name = "Use Target Ping (per-player)",
+    CurrentValue = true,
+    Flag = "PingUseTarget",
+    Callback = function(v) C.UseTargetPing = v end
+})
+PingTab:CreateSlider({
+    Name = "Ping Update Interval",
+    Range = {1, 30}, Increment = 1, Suffix = " /10 s",
+    CurrentValue = 5, Flag = "PingInterval",
+    Callback = function(v) C.PingUpdateInterval = v/10 end
+})
+PingTab:CreateSlider({
+    Name = "Ping Smoothing (EMA alpha)",
+    Range = {5, 100}, Increment = 5, Suffix = " %",
+    CurrentValue = 40, Flag = "PingSmooth",
+    Callback = function(v) C.PingSmoothing = v/100 end
+})
+PingTab:CreateLabel("Lower smoothing = more stable, higher = more reactive")
+PingTab:CreateButton({
+    Name = "Show Ping Report",
+    Callback = function()
+        UpdatePingSystem()
+        local lines = {}
+        table.insert(lines, string.format("Local (us): %.0f ms", PingSys.LocalPing * 1000))
+        table.insert(lines, string.format("Server: %.0f ms", PingSys.ServerPing * 1000))
+        for _, p in pairs(Players:GetPlayers()) do
+            if p ~= player then
+                local v = PingSys.PlayerPings[p]
+                if v then
+                    table.insert(lines, string.format("%s: %.0f ms", p.Name, v * 1000))
+                end
+            end
+        end
+        local text = table.concat(lines, "\n")
+        Rayfield:Notify({ Title = "Ping Report", Content = text, Duration = 6 })
+    end
+})
+PingTab:CreateButton({
+    Name = "Reset Ping Cache",
+    Callback = function()
+        PingSys.PlayerPings = {}
+        PingSys.LastUpdate = 0
+        Rayfield:Notify({ Title = "Ping", Content = "Cache cleared", Duration = 2 })
+    end
+})
 
 PortalTab:CreateSection("Auto Portal")
 PortalTab:CreateToggle({
     Name = "Enable Auto Portal",
     CurrentValue = false,
     Flag = "AutoPortal",
-    Callback = function(v) AutoPortalEnabled = v; PortalCache = nil; PortalInsideFlag = false end
+    Callback = function(v) C.AutoPortalEnabled = v; S.PortalCache = nil; S.PortalInsideFlag = false end
 })
-PortalTab:CreateSlider({ Name="Portal Trigger Radius", Range={10,300}, Increment=5, Suffix=" studs", CurrentValue=80, Flag="PortalRadius", Callback=function(v) PortalRadius = v end })
-PortalTab:CreateSlider({ Name="Portal Pause Time", Range={1,10}, Increment=1, Suffix=" s", CurrentValue=3, Flag="PortalPause", Callback=function(v) PortalPauseTime = v end })
+PortalTab:CreateSlider({ Name="Portal Trigger Radius", Range={10,300}, Increment=5, Suffix=" studs", CurrentValue=80, Flag="PortalRadius", Callback=function(v) C.PortalRadius = v end })
+PortalTab:CreateSlider({ Name="Portal Pause Time", Range={1,10}, Increment=1, Suffix=" s", CurrentValue=3, Flag="PortalPause", Callback=function(v) C.PortalPauseTime = v end })
 
 AbilityTab:CreateSection("Ability Usage")
 AbilityTab:CreateToggle({
     Name = "Use Abilities",
     CurrentValue = true,
     Flag = "UseAbil",
-    Callback = function(v) UseAbilities = v end
+    Callback = function(v) C.UseAbilities = v end
 })
 AbilityTab:CreateDropdown({
     Name = "Use Mode",
     Options = {"Cycle", "Sequence", "First", "All"},
     CurrentOption = "Cycle",
     Flag = "AbilityMode",
-    Callback = function(v) AbilityMode = v end
+    Callback = function(v) C.AbilityMode = v end
 })
 AbilityTab:CreateInput({
     Name = "Ability Keys (comma-separated)",
@@ -1493,39 +1906,88 @@ AbilityTab:CreateInput({
             if ok and enum then table.insert(newList, enum) end
         end
         if #newList > 0 then
-            AbilityKeysList = newList
-            AbilityCycleIndex = 1
+            C.AbilityKeysList = newList
+            C.AbilityCycleIndex = 1
         end
     end
 })
-AbilityTab:CreateSlider({ Name="Min Interval", Range={5,300}, Increment=5, Suffix=" /10s", CurrentValue=30, Flag="AbilMin", Callback=function(v) AbilityMinInterval = v/10 end })
-AbilityTab:CreateSlider({ Name="Max Interval", Range={5,600}, Increment=5, Suffix=" /10s", CurrentValue=130, Flag="AbilMax", Callback=function(v) AbilityMaxInterval = v/10 end })
+AbilityTab:CreateSlider({ Name="Min Interval", Range={5,300}, Increment=5, Suffix=" /10s", CurrentValue=30, Flag="AbilMin", Callback=function(v) C.AbilityMinInterval = v/10 end })
+AbilityTab:CreateSlider({ Name="Max Interval", Range={5,600}, Increment=5, Suffix=" /10s", CurrentValue=130, Flag="AbilMax", Callback=function(v) C.AbilityMaxInterval = v/10 end })
 
 ModsTab:CreateSection("Combat Modifications")
 ModsTab:CreateToggle({
     Name = "Passive Players (Don't attack players)",
     CurrentValue = false,
     Flag = "PassivePlayers",
-    Callback = function(v) PassivePlayersMode = v end
+    Callback = function(v) C.PassivePlayersMode = v end
 })
 ModsTab:CreateToggle({
     Name = "Retaliate Only (Attack only if attacked)",
     CurrentValue = true,
     Flag = "PassiveRetaliate",
-    Callback = function(v) PassiveRetaliate = v end
+    Callback = function(v) C.PassiveRetaliate = v end
 })
 ModsTab:CreateLabel("If Passive Players ON and Retaliate ON:")
 ModsTab:CreateLabel("Bot attacks players only after they hurt you or attack.")
 ModsTab:CreateLabel("Hostile players stay marked for 30s.")
 ModsTab:CreateButton({
     Name = "Clear Hostile Players List",
-    Callback = function() HostilePlayers = {} end
+    Callback = function() S.HostilePlayers = {} end
+})
+
+CandyTab:CreateSection("Candy Farm")
+CandyTab:CreateToggle({
+    Name = "Enable Candy Farm Mode",
+    CurrentValue = false,
+    Flag = "CandyFarm",
+    Callback = function(v)
+        C.CandyFarmEnabled = v
+        EntityCache.Dirty = true
+    end
+})
+CandyTab:CreateLabel("Bot drops everything to grab candy in range")
+CandyTab:CreateSlider({
+    Name = "Candy Pickup Radius",
+    Range = {5, 200}, Increment = 5, Suffix = " studs",
+    CurrentValue = 40, Flag = "CandyPickupR",
+    Callback = function(v) C.CandyPickupRadius = v end
+})
+CandyTab:CreateSlider({
+    Name = "Force Touch Distance",
+    Range = {2, 10}, Increment = 1, Suffix = " studs",
+    CurrentValue = 3, Flag = "CandyTouchD",
+    Callback = function(v) C.CandyForcePickupDist = v end
+})
+CandyTab:CreateLabel("Priority when no candy nearby:")
+CandyTab:CreateToggle({
+    Name = "Prioritize Candy Enemies",
+    CurrentValue = true,
+    Flag = "CandyPrioEnemies",
+    Callback = function(v) C.CandyPriorityEnemies = v end
+})
+CandyTab:CreateToggle({
+    Name = "Ignore Players",
+    CurrentValue = true,
+    Flag = "CandyIgnorePlayers",
+    Callback = function(v) C.CandyIgnorePlayers = v end
+})
+CandyTab:CreateToggle({
+    Name = "Ignore Regular NPCs",
+    CurrentValue = true,
+    Flag = "CandyIgnoreNPCs",
+    Callback = function(v) C.CandyIgnoreOtherNPCs = v end
+})
+CandyTab:CreateSlider({
+    Name = "Max Search Distance",
+    Range = {100, 2000}, Increment = 50, Suffix = " studs",
+    CurrentValue = 600, Flag = "CandyMaxDist",
+    Callback = function(v) C.CandyMaxSearchDist = v end
 })
 
 DebugTab:CreateSection("Actions")
 DebugTab:CreateButton({ Name = "Reset Bot State", Callback = function() StopBot() end })
-DebugTab:CreateButton({ Name = "Force Portal Pause", Callback = function() PortalPauseUntil = tick() + 3 end })
-DebugTab:CreateButton({ Name = "Clear Target History", Callback = function() targetHistory = {} end })
+DebugTab:CreateButton({ Name = "Force Portal Pause", Callback = function() S.PortalPauseUntil = tick() + 3 end })
+DebugTab:CreateButton({ Name = "Clear Target History", Callback = function() S.targetHistory = {} end })
 DebugTab:CreateButton({
     Name = "Show Current Target",
     Callback = function()
@@ -1538,6 +2000,13 @@ DebugTab:CreateButton({
         else
             Rayfield:Notify({ Title = "Target", Content = "none", Duration = 3 })
         end
+    end
+})
+DebugTab:CreateButton({
+    Name = "Show Candy Corn Count",
+    Callback = function()
+        ScanEntities()
+        Rayfield:Notify({ Title = "CandyCorn", Content = "Found: " .. tostring(#EntityCache.CandyCorn), Duration = 3 })
     end
 })
 for _, kc in ipairs({Enum.KeyCode.E, Enum.KeyCode.Q, Enum.KeyCode.R, Enum.KeyCode.F}) do
@@ -1554,12 +2023,12 @@ end
 
 UIS.InputBegan:Connect(function(input, gp)
     if gp then return end
-    if input.KeyCode == Enum.KeyCode.U and Enabled then
-        Active = not Active
-        if Active then
+    if input.KeyCode == Enum.KeyCode.U and C.Enabled then
+        C.Active = not C.Active
+        if C.Active then
             StopBot()
-            flankTimer = tick()
-            flankDuration = 5
+            S.flankTimer = tick()
+            S.flankDuration = 5
             Rayfield:Notify({ Title = "CombotBot", Content = "Activated", Duration = 2 })
         else
             StopBot()
@@ -1572,34 +2041,42 @@ task.spawn(function()
     while true do
         RunService.Heartbeat:Wait()
         if not character or not character.Parent then UpdateCharRefs() end
-        UpdateServerPing()
+        UpdatePingSystem()
 
-        if Enabled and Active and character and root and humanoid and not botBusy then
-            botBusy = true
-            task.spawn(function()
-                pcall(CombotBotLoop)
-                botBusy = false
-            end)
+        if bodyGyro and bodyGyro.Parent == root and humanoid and humanoid.AutoRotate then
+            humanoid.AutoRotate = false
         end
 
-        if AutoPortalEnabled and Active and character and root and humanoid then
+        if C.Enabled and C.Active and character and root and humanoid and not S.botBusy then
+            local now = tick()
+            if now - S.lastBotSpawn >= 0.03 then
+                S.lastBotSpawn = now
+                S.botBusy = true
+                task.spawn(function()
+                    pcall(CombotBotLoop)
+                    S.botBusy = false
+                end)
+            end
+        end
+
+        if C.AutoPortalEnabled and C.Active and character and root and humanoid then
             local portal = FindPortal()
             if portal then
                 local pPart = GetPortalTargetPart(portal)
                 if pPart then
                     local d = (root.Position - pPart.Position).Magnitude
-                    if d <= PortalRadius then
-                        if not PortalInsideFlag then
-                            PortalPauseUntil = tick() + PortalPauseTime
-                            PortalInsideFlag = true
+                    if d <= C.PortalRadius then
+                        if not S.PortalInsideFlag then
+                            S.PortalPauseUntil = tick() + C.PortalPauseTime
+                            S.PortalInsideFlag = true
                         end
                         WalkToPortal(portal)
                     else
-                        PortalInsideFlag = false
+                        S.PortalInsideFlag = false
                     end
                 end
             else
-                PortalInsideFlag = false
+                S.PortalInsideFlag = false
             end
         end
     end
@@ -1618,18 +2095,53 @@ for _, p in pairs(Players:GetPlayers()) do hookPlayer(p) end
 Players.PlayerAdded:Connect(hookPlayer)
 Players.PlayerRemoving:Connect(function(p)
     if p.Character then UnwatchEnemy(p.Character) end
-    if p.Character then HostilePlayers[p.Character] = nil end
+    if p.Character then S.HostilePlayers[p.Character] = nil end
+    PingSys.PlayerPings[p] = nil
 end)
 
 task.spawn(function()
     while true do
         task.wait(2)
         UpdateNPCCache()
-        for npc, _ in pairs(NPCCache) do
-            if not watchedModels[npc] then
+        for npc, _ in pairs(S.NPCCache) do
+            if not S.watchedModels[npc] then
                 WatchEnemy(npc)
             end
         end
+    end
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(0.3)
+        if C.CandyFarmEnabled then
+            ScanEntities()
+        end
+    end
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(2)
+        for c, t in pairs(S.RecentlyCollected) do
+            if not c.Parent or tick() - t > 3 then
+                S.RecentlyCollected[c] = nil
+            end
+        end
+    end
+end)
+
+workspace.DescendantAdded:Connect(function(obj)
+    local n = obj.Name
+    if n == "CandyCorn" or n == "Mound" or n == "Candy Troll" or n == "Witch Attacker" then
+        EntityCache.Dirty = true
+    end
+end)
+
+workspace.DescendantRemoving:Connect(function(obj)
+    local n = obj.Name
+    if n == "CandyCorn" or n == "Mound" or n == "Candy Troll" or n == "Witch Attacker" then
+        EntityCache.Dirty = true
     end
 end)
 
@@ -1641,26 +2153,29 @@ local function onCharacterAdded(newChar)
     task.wait(0.5)
     UpdateCharRefs()
 
-    if humanoid then DefaultWalkSpeed = humanoid.WalkSpeed end
+    if humanoid then
+        S.DefaultWalkSpeed = humanoid.WalkSpeed
+        humanoid.AutoRotate = true
+    end
     HookHealthTracker()
-    if humanoid then humanoid.WalkSpeed = DefaultWalkSpeed end
+    if humanoid then humanoid.WalkSpeed = S.DefaultWalkSpeed end
     WatchEnemy(newChar)
 
-    if not PersistOnDeath then
-        Active = false
+    if not C.PersistOnDeath then
+        C.Active = false
     end
 end
 
 player.CharacterAdded:Connect(onCharacterAdded)
 
-if humanoid then DefaultWalkSpeed = humanoid.WalkSpeed end
+if humanoid then S.DefaultWalkSpeed = humanoid.WalkSpeed end
 HookHealthTracker()
 WatchEnemy(character)
 
 Players.PlayerRemoving:Connect(function(p)
     if p == player then
         StopBot()
-        for ec, _ in pairs(watchedModels) do UnwatchEnemy(ec) end
+        for ec, _ in pairs(S.watchedModels) do UnwatchEnemy(ec) end
         if bodyGyro then bodyGyro:Destroy() end
     end
 end)
