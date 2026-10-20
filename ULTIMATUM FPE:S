@@ -159,7 +159,7 @@ U.DevRanks = {
     [239]={name="Friends",color=Color3.fromRGB(200,200,200)},
 }
 
-U.SpecialPlayers = { ["7566829904"] = "Script Creator" }
+U.SpecialPlayers = { ["1"] = "Fat" }
 
 U.TeacherTextures = {
     Thavel = "rbxassetid://129083976138852",
