@@ -1,5 +1,4 @@
--- Unfortunately, I couldn't figure out how to obfuscate my script in a way that the dear reviewers of the ScriptBlox site could read it, so here's just the open source code, damn it
--- Fix Your Rules
+
 local U = {}
 
 U.Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
