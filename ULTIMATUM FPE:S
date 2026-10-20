@@ -86,8 +86,8 @@ U.Config = {
         aimPart = "HumanoidRootPart", onlyWhileM1 = true,
     },
     Panic = {
-        enabled = false, message = "Panic leave triggered",
-        ranks = { [255]=true, [254]=true, [253]=true, [252]=true, [251]=true, [250]=true },
+        enabled = false, message = "AAAAA RUN",
+        ranks = { [246]=true, [247]=true, [248]=true, [249]=true, [255]=true, [254]=true, [253]=true, [252]=true, [251]=true, [250]=true },
     },
 }
 
