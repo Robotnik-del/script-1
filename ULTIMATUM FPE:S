@@ -679,7 +679,8 @@ U.getBaseSpeed = function()
     local rs = char:GetAttribute("RunSpeed") or 26
     U.State.smartSpeed.baseWalk = dw
     U.State.smartSpeed.baseRun = rs
-    if char:GetAttribute("Running") then return rs else return dw endend
+    if char:GetAttribute("Running") then return rs else return dw end
+end
 U.computeTargetSpeed = function()
     local char = U.getChar()
     if not char then return 16 end
@@ -1380,7 +1381,8 @@ U.applyThirdPerson = function()
             U.LP.CameraMode = U.State.cameraSaved.mode
             U.LP.CameraMaxZoomDistance = U.State.cameraSaved.maxZoom
             U.LP.CameraMinZoomDistance = U.State.cameraSaved.minZoom
-            U.State.cameraSaved = nil        end
+            U.State.cameraSaved = nil
+        end
     end
 end
 U.setupStaminaSignal = function()
