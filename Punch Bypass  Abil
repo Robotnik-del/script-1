@@ -138,6 +138,7 @@ local function sp(target, abilityId)
     local mousePos = camera.CFrame.Position + camera.CFrame.LookVector * 100
     local realDist = (hitbox.Position - hitPart.Position).Magnitude
     SendPacket:FireServer("Use Ability", "Punch", char:GetPivot(), mousePos, nil)
+    task.wait(0.05)
     SendPacket:FireServer(
         "Use Punch",
         abilityId,
@@ -197,36 +198,30 @@ local function pb()
     sp(best, Config.PunchBypass.abilityId)
 end
 
-local function aLoop()
-    while State.auraThread do
-        if not Config.MiniAura.enabled then
-            task.wait(0.1)
-        else
-            local hrp = gr()
-            if hrp then
-                local char = gc()
-                local hitbox = char and char:FindFirstChild("Hitbox")
-                if hitbox then
-                    local targets = ctr(Config.MiniAura.range)
-                    for _, t in ipairs(targets) do
-                        if not Config.MiniAura.enabled then
-                            break
-                        end
-                        sp(t, Config.MiniAura.abilityId)
-                        task.wait(0.03)
-                    end
-                end
-            end
-            task.wait(Config.MiniAura.interval)
-        end
-    end
-end
-
 local function sa()
     if State.auraThread then
         return
     end
-    State.auraThread = task.spawn(aLoop)
+    State.auraThread = true
+    task.spawn(function()
+        while true do
+            if Config.MiniAura.enabled then
+                local targets = ctr(Config.MiniAura.range)
+                for _, t in ipairs(targets) do
+                    if not Config.MiniAura.enabled then
+                        break
+                    end
+                    if t and t.Parent then
+                        pcall(sp, t, Config.MiniAura.abilityId)
+                    end
+                    task.wait(0.3)
+                end
+                task.wait(Config.MiniAura.interval)
+            else
+                task.wait(0.1)
+            end
+        end
+    end)
 end
 
 local function bui()
