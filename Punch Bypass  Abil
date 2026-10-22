@@ -11,16 +11,15 @@ local Config = {
     MiniAura = {
         enabled = false,
         range = 10,
-        interval = 0.35,
+        interval = 0.4,
         abilityId = 81285671124281,
     },
 }
 
 local State = {
     lastBypass = 0,
+    bypassBusy = false,
     auraThread = nil,
-    modelCache = {},
-    lastCacheUpdate = 0,
     dragging = false,
     dragStart = nil,
     dragOrigin = nil,
@@ -45,25 +44,6 @@ local function al(m)
     return h and h.Health > 0
 end
 
-local function ipm(m)
-    local plr = Players:GetPlayerFromCharacter(m)
-    return plr ~= nil and plr ~= LP
-end
-
-local function ibm(m)
-    if m == gc() then
-        return false
-    end
-    if ipm(m) then
-        return false
-    end
-    local h = m:FindFirstChildOfClass("Humanoid")
-    if not h or h.Health <= 0 then
-        return false
-    end
-    return m:FindFirstChild("HumanoidRootPart") ~= nil
-end
-
 local function fhp(target)
     if not target then
         return nil
@@ -77,23 +57,7 @@ local function fhp(target)
     return target.PrimaryPart or target:FindFirstChildWhichIsA("BasePart")
 end
 
-local function umc()
-    local now = os.clock()
-    if now - State.lastCacheUpdate < 1.5 then
-        return
-    end
-    State.lastCacheUpdate = now
-    local cache = {}
-    for _, m in ipairs(workspace:GetDescendants()) do
-        if m:IsA("Model") and ibm(m) then
-            table.insert(cache, m)
-        end
-    end
-    State.modelCache = cache
-end
-
-local function ctr(range)
-    umc()
+local function collectTargets(range)
     local hrp = gr()
     if not hrp then
         return {}
@@ -108,18 +72,10 @@ local function ctr(range)
             end
         end
     end
-    for _, m in ipairs(State.modelCache) do
-        if m.Parent and al(m) then
-            local tHRP = m:FindFirstChild("HumanoidRootPart")
-            if tHRP and (tHRP.Position - myPos).Magnitude <= range then
-                table.insert(list, m)
-            end
-        end
-    end
     return list
 end
 
-local function sp(target, abilityId)
+local function sp(target, abilityId, delay)
     local char = gc()
     local hrp = gr()
     if not char or not hrp then
@@ -138,7 +94,9 @@ local function sp(target, abilityId)
     local mousePos = camera.CFrame.Position + camera.CFrame.LookVector * 100
     local realDist = (hitbox.Position - hitPart.Position).Magnitude
     SendPacket:FireServer("Use Ability", "Punch", char:GetPivot(), mousePos, nil)
-    task.wait(0.05)
+    if delay and delay > 0 then
+        task.wait(delay)
+    end
     SendPacket:FireServer(
         "Use Punch",
         abilityId,
@@ -154,10 +112,6 @@ local function sp(target, abilityId)
 end
 
 local function pb()
-    local now = os.clock()
-    if now - State.lastBypass < 0.05 then
-        return
-    end
     local hrp = gr()
     if not hrp then
         return
@@ -177,25 +131,9 @@ local function pb()
         end
     end
     if not best then
-        umc()
-        for _, m in ipairs(State.modelCache) do
-            if m.Parent and al(m) then
-                local tHRP = m:FindFirstChild("HumanoidRootPart")
-                if tHRP then
-                    local d = (tHRP.Position - myPos).Magnitude
-                    if d < bestDist then
-                        bestDist = d
-                        best = m
-                    end
-                end
-            end
-        end
-    end
-    if not best then
         return
     end
-    State.lastBypass = now
-    sp(best, Config.PunchBypass.abilityId)
+    pcall(sp, best, Config.PunchBypass.abilityId, 0.05)
 end
 
 local function sa()
@@ -206,19 +144,16 @@ local function sa()
     task.spawn(function()
         while true do
             if Config.MiniAura.enabled then
-                local targets = ctr(Config.MiniAura.range)
-                for _, t in ipairs(targets) do
-                    if not Config.MiniAura.enabled then
-                        break
+                local targets = collectTargets(Config.MiniAura.range)
+                if #targets > 0 then
+                    local target = targets[math.random(#targets)]
+                    if target and target.Parent then
+                        pcall(sp, target, Config.MiniAura.abilityId, 0)
                     end
-                    if t and t.Parent then
-                        pcall(sp, t, Config.MiniAura.abilityId)
-                    end
-                    task.wait(0.3)
                 end
                 task.wait(Config.MiniAura.interval)
             else
-                task.wait(0.1)
+                task.wait(0.2)
             end
         end
     end)
@@ -498,13 +433,19 @@ UIS.InputBegan:Connect(function(input, gpe)
         if not Config.PunchBypass.enabled then
             return
         end
-        task.delay(0.02, pb)
+        if State.bypassBusy then
+            return
+        end
+        State.bypassBusy = true
+        task.spawn(function()
+            pcall(pb)
+            State.bypassBusy = false
+        end)
     end
 end)
 
 LP.CharacterAdded:Connect(function()
     task.wait(0.5)
     State.lastBypass = 0
-    State.modelCache = {}
-    State.lastCacheUpdate = 0
+    State.bypassBusy = false
 end)
