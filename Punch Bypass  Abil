@@ -365,12 +365,25 @@ UIS.InputBegan:Connect(function(input, gpe)
         end
         return
     end
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        if not Config.PunchBypass.enabled then return end
-        task.spawn(function()
-            pcall(pb)
-        end)
+    local isClick = input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch
+    if not isClick then return end
+    if not Config.PunchBypass.enabled then return end
+    if input.UserInputType == Enum.UserInputType.Touch then
+        local pos = input.Position
+        local pg = LP:FindFirstChild("PlayerGui")
+        if pg then
+            local guiObjects = pg:GetGuiObjectsAtPosition(pos.X, pos.Y)
+            for _, obj in ipairs(guiObjects) do
+                if obj:IsDescendantOf(State.gui) then
+                    return
+                end
+            end
+        end
     end
+    task.spawn(function()
+        pcall(pb)
+    end)
 end)
 LP.CharacterAdded:Connect(function()
     task.wait(0.5)
