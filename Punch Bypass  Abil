@@ -7,7 +7,7 @@ local Remotes = RS:WaitForChild("ReplicatedStorage Package"):WaitForChild("Remot
 local SendPacket = Remotes.SendPacket
 
 local Config = {
-    PunchBypass = { enabled = false, abilityId = 81285671124281, range = 15 },
+    PunchBypass = { enabled = false, abilityId = 1892347547123, range = 15 },
     MiniAura = {
         enabled = false,
         range = 10,
