@@ -717,6 +717,24 @@ end
 if LocalPlayer.Character then bindDamage() end
 LocalPlayer.CharacterAdded:Connect(onCharAdded)
 
+local function getViewport()
+    local cam = WS.CurrentCamera
+    return cam and cam.ViewportSize or Vector2.new(800, 600)
+end
+
+local isMobile = UIS.TouchEnabled and not UIS.KeyboardEnabled
+
+local function calcLayout()
+    local vp = getViewport()
+    local maxW = isMobile and 400 or 580
+    local maxH = isMobile and 560 or 660
+    local w = math.clamp(math.floor(vp.X * 0.88), 300, math.max(300, math.min(maxW, vp.X - 20)))
+    local h = math.clamp(math.floor(vp.Y * 0.72), 360, math.max(360, math.min(maxH, vp.Y - 30)))
+    local side = math.clamp(math.floor(w * 0.28), 88, 140)
+    local scale = math.clamp(w / (isMobile and 360 or 460), 0.78, 1.15)
+    return w, h, side, scale
+end
+
 local GUI = Instance.new("ScreenGui")
 GUI.Name = "AutoFarmBot"
 GUI.ResetOnSpawn = false
@@ -789,9 +807,8 @@ local function Notify(t, x, d)
     end)
 end
 
-local isMobile = UIS.TouchEnabled and not UIS.KeyboardEnabled
-local winW = isMobile and 340 or 440
-local winH = isMobile and 480 or 580
+local winW, winH, SideWidth, uiScale = calcLayout()
+local userMoved = false
 
 local Win = Instance.new("Frame")
 Win.Size = UDim2.new(0, winW, 0, winH)
@@ -909,7 +926,12 @@ UIS.InputChanged:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
         local delta = input.Position - floatDragStart
         if math.abs(delta.X) > 6 or math.abs(delta.Y) > 6 then floatMoved = true end
-        FloatBtn.Position = UDim2.new(floatStartPos.X.Scale, floatStartPos.X.Offset + delta.X, floatStartPos.Y.Scale, floatStartPos.Y.Offset + delta.Y)
+        local vp = getViewport()
+        local nx = floatStartPos.X.Offset + delta.X
+        local ny = floatStartPos.Y.Offset + delta.Y
+        nx = math.clamp(nx, 0, math.max(0, vp.X - 50))
+        ny = math.clamp(ny, 0, math.max(0, vp.Y - 50))
+        FloatBtn.Position = UDim2.new(0, nx, 0, ny)
     end
 end)
 UIS.InputEnded:Connect(function(input)
@@ -940,6 +962,7 @@ TB.InputBegan:Connect(function(input)
         dragging = true
         dragStart = input.Position
         startPos = Win.Position
+        userMoved = true
     end
 end)
 UIS.InputChanged:Connect(function(input)
@@ -1229,16 +1252,80 @@ Button("Destroy Hub", function()
     GUI:Destroy()
 end)
 
+local function storeBaseSizes()
+    for _, d in ipairs(Win:GetDescendants()) do
+        if (d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox")) and not d:GetAttribute("_baseSize") then
+            d:SetAttribute("_baseSize", d.TextSize)
+        end
+    end
+end
+
+task.defer(storeBaseSizes)
+
+local function applyResponsive()
+    local w, h, side, scale = calcLayout()
+    winW, winH, SideWidth, uiScale = w, h, side, scale
+
+    Win.Size = UDim2.new(0, w, 0, h)
+    if not userMoved then
+        Win.Position = UDim2.new(0.5, -w / 2, 0.5, -h / 2)
+    end
+
+    if TabsFrame then
+        TabsFrame.Size = UDim2.new(0, side, 1, -TB.Size.Y.Offset)
+    end
+    if CA then
+        CA.Size = UDim2.new(1, -side, 1, -TB.Size.Y.Offset - 32)
+        CA.Position = UDim2.new(0, side, 0, TB.Size.Y.Offset + 26)
+    end
+
+    for _, d in ipairs(Win:GetDescendants()) do
+        if d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox") then
+            local base = d:GetAttribute("_baseSize")
+            if base then
+                d.TextSize = math.max(8, math.floor(base * scale))
+            end
+        end
+    end
+
+    NFs.Size = UDim2.new(0, math.min(280, w - 40), 0, 0)
+
+    local vp = getViewport()
+    if FloatBtn.Visible then
+        local px = FloatBtn.Position.X.Offset
+        local py = FloatBtn.Position.Y.Offset
+        FloatBtn.Position = UDim2.new(0, math.clamp(px, 0, math.max(0, vp.X - 50)), 0, math.clamp(py, 0, math.max(0, vp.Y - 50)))
+    end
+end
+
+local TabsFrame = nil
+
+local function bindViewport()
+    local cam = WS.CurrentCamera
+    if cam then
+        cam:GetPropertyChangedSignal("ViewportSize"):Connect(function()
+            pcall(applyResponsive)
+        end)
+    end
+end
+
+bindViewport()
+WS:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+    task.wait(0.3)
+    bindViewport()
+    pcall(applyResponsive)
+end)
+
+task.defer(function()
+    pcall(applyResponsive)
+end)
+
 task.spawn(function()
     while GUI.Parent do
         local parts = {}
         if Bot.Enabled then
             parts[#parts + 1] = Bot.State
-            if Bot.IsTitan then
-                parts[#parts + 1] = "TITAN"
-            else
-                parts[#parts + 1] = "HUMAN"
-            end
+            parts[#parts + 1] = Bot.IsTitan and "TITAN" or "HUMAN"
             local myRoot = getMyRoot()
             local targetRoot = Bot.Target and getRoot(Bot.Target)
             if myRoot and targetRoot then
@@ -1246,8 +1333,7 @@ task.spawn(function()
             end
             local tool = getWeapon()
             if tool then
-                local isLaser = tool:FindFirstChild("Shoot") ~= nil
-                parts[#parts + 1] = isLaser and "LASER" or "GUN"
+                parts[#parts + 1] = tool:FindFirstChild("Shoot") and "LASER" or "GUN"
             else
                 parts[#parts + 1] = "NO WEAPON"
             end
