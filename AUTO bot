@@ -1,0 +1,1268 @@
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local UIS = game:GetService("UserInputService")
+local RS = game:GetService("RunService")
+local TS = game:GetService("TweenService")
+local CG = game:GetService("CoreGui")
+local WS = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+local PathService = game:GetService("PathfindingService")
+local VIM = game:GetService("VirtualInputManager")
+
+local HubC = Color3.fromRGB(30, 144, 255)
+local HubA = Color3.fromRGB(173, 216, 230)
+local BG = Color3.fromRGB(15, 20, 25)
+local BG2 = Color3.fromRGB(20, 30, 40)
+local BG3 = Color3.fromRGB(30, 40, 55)
+local TXT = Color3.fromRGB(200, 220, 255)
+
+local ClickSound = 87437544236708
+local MsgSound = 72264591133889
+local UIAppear = 132442985525251
+local UIDisappear = 137957059235157
+local SliderSound = 131677038997771
+
+local AIFolder = WS:WaitForChild("AI", 10)
+
+local function PlaySound(id)
+    local s = Instance.new("Sound")
+    s.SoundId = "rbxassetid://" .. id
+    s.Volume = 0.5
+    s.Parent = CG
+    s:Play()
+    task.delay(0.5, function() s:Destroy() end)
+end
+
+local Bot = {
+    Enabled = false,
+    KeepDistance = 60,
+    ShootRange = 120,
+    StrafeSpeed = 16,
+    AttackInterval = 0.3,
+    LaserHoldTime = 0.5,
+    UsePathfinding = true,
+    UseAbilities = true,
+    AbilityCooldown = 1.5,
+    AbilityMode = "Cycle",
+    AbilityKeys = {Enum.KeyCode.E, Enum.KeyCode.Q, Enum.KeyCode.R, Enum.KeyCode.F},
+    AbilityIndex = 1,
+    Target = nil,
+    LastTargetScan = 0,
+    LastShoot = 0,
+    LastAbility = 0,
+    LastTitanCheck = 0,
+    IsTitan = false,
+    LastStrafeFlip = 0,
+    StrafeDir = 1,
+    IsHoldingLaser = false,
+    LaserToken = 0,
+    LaserStart = 0,
+    LastPos = nil,
+    LastStuckCheck = tick(),
+    StuckTimer = 0,
+    LastActionTime = tick(),
+    Waypoints = {},
+    WaypointIndex = 1,
+    LastPathTime = 0,
+    PathComputing = false,
+    State = "IDLE"
+}
+
+local Auto = {
+    ReadyEnabled = false,
+    AFKEnabled = false,
+    PartnerDropEnabled = false,
+    ReviveEnabled = false,
+    ReadyRemote = nil,
+    AFKRemote = nil,
+    PartnerDiedRemote = nil,
+    RemoveRemote = nil,
+    LastReadyFire = 0
+}
+
+local DamageTP = {
+    Enabled = false,
+    Cooldown = 0.6,
+    LastTP = 0,
+    Distance = 30
+}
+
+local function readFaction(npc)
+    local ok, v = pcall(function() return npc:GetAttribute("Faction") end)
+    if ok and v ~= nil then return tostring(v) end
+    local cat = npc:FindFirstChild("Category")
+    if cat then
+        local ok2, v2 = pcall(function() return cat:GetAttribute("Faction") end)
+        if ok2 and v2 ~= nil then return tostring(v2) end
+        local f = cat:FindFirstChild("Faction")
+        if f then
+            if f:IsA("ValueBase") then return tostring(f.Value) end
+            local inner = f:FindFirstChildWhichIsA("ValueBase")
+            if inner then return tostring(inner.Value) end
+        end
+    end
+    return "Unknown"
+end
+
+local function isEnemy(npc)
+    if string.find(string.lower(npc.Name), "bathub") then return true end
+    local faction = readFaction(npc)
+    if faction and string.find(string.lower(tostring(faction)), "bathub") then return true end
+    return false
+end
+
+local function getRoot(npc)
+    return npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChild("Head") or npc.PrimaryPart
+end
+
+local function getMyRoot()
+    local c = LocalPlayer.Character
+    return c and c:FindFirstChild("HumanoidRootPart")
+end
+local function getMyHum()
+    local c = LocalPlayer.Character
+    return c and c:FindFirstChildOfClass("Humanoid")
+end
+
+local function isTitan()
+    local char = LocalPlayer.Character
+    if not char then return false end
+    local infected = char:FindFirstChild("InfectedV")
+    if infected and infected:IsA("BoolValue") and infected.Value then return true end
+    if char:FindFirstChild("Titan") then return true end
+    return false
+end
+
+local function isValidEnemy(npc)
+    if not npc or not npc.Parent then return false end
+    local hum = npc:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return false end
+    if not getRoot(npc) then return false end
+    return true
+end
+
+local function hDist(a, b)
+    return Vector3.new(a.X - b.X, 0, a.Z - b.Z).Magnitude
+end
+
+local function findNearestEnemy()
+    local myRoot = getMyRoot()
+    if not myRoot or not AIFolder then return nil end
+    local best, bestDist = nil, math.huge
+    for _, npc in ipairs(AIFolder:GetChildren()) do
+        if npc:IsA("Model") and isEnemy(npc) and isValidEnemy(npc) then
+            local root = getRoot(npc)
+            local d = hDist(myRoot.Position, root.Position)
+            if d < bestDist then
+                bestDist = d
+                best = npc
+            end
+        end
+    end
+    return best
+end
+
+local function getWeapon()
+    local char = LocalPlayer.Character
+    if not char then return nil, nil end
+    local tool = char:FindFirstChildOfClass("Tool")
+    if tool then
+        local shoot = tool:FindFirstChild("Shoot")
+        if shoot and shoot:IsA("RemoteEvent") then return tool, shoot end
+        local fire = tool:FindFirstChild("FireGun")
+        if fire and fire:IsA("RemoteEvent") then return tool, fire end
+    end
+    local backpack = LocalPlayer:FindFirstChild("Backpack")
+    if not backpack then return nil, nil end
+    for _, t in ipairs(backpack:GetChildren()) do
+        if t:IsA("Tool") then
+            local shoot = t:FindFirstChild("Shoot")
+            if shoot and shoot:IsA("RemoteEvent") then
+                local ok = pcall(function() t.Parent = char end)
+                if ok then task.wait(0.1) return t, shoot end
+            end
+            local fire = t:FindFirstChild("FireGun")
+            if fire and fire:IsA("RemoteEvent") then
+                local ok = pcall(function() t.Parent = char end)
+                if ok then task.wait(0.1) return t, fire end
+            end
+        end
+    end
+    return nil, nil
+end
+
+local function getShootPart(target)
+    if not target then return nil end
+    return target:FindFirstChild("Head") or target:FindFirstChild("HumanoidRootPart")
+end
+
+local function endLaser(remote)
+    if remote then pcall(function() remote:FireServer("End") end) end
+    Bot.IsHoldingLaser = false
+    Bot.LaserToken = Bot.LaserToken + 1
+end
+
+local function holdLaser(remote, target)
+    if Bot.IsHoldingLaser then return end
+    local part = getShootPart(target)
+    if not part then return end
+    Bot.IsHoldingLaser = true
+    Bot.LaserStart = tick()
+    Bot.LaserToken = Bot.LaserToken + 1
+    local myToken = Bot.LaserToken
+    task.spawn(function()
+        pcall(function() remote:FireServer("Begin", part.Position) end)
+        local startT = tick()
+        local lastRetarget = 0
+        while tick() - startT < Bot.LaserHoldTime do
+            if Bot.LaserToken ~= myToken then break end
+            if not Bot.Enabled then break end
+            if not remote.Parent then break end
+            if not isValidEnemy(Bot.Target) then
+                if tick() - lastRetarget > 0.2 then
+                    lastRetarget = tick()
+                    local newTarget = findNearestEnemy()
+                    if newTarget then
+                        Bot.Target = newTarget
+                    else
+                        break
+                    end
+                end
+            end
+            if isValidEnemy(Bot.Target) then
+                local p = getShootPart(Bot.Target)
+                if p then
+                    pcall(function() remote:FireServer("Update", p.Position) end)
+                end
+            end
+            RS.Heartbeat:Wait()
+        end
+        pcall(function() remote:FireServer("End") end)
+        if Bot.LaserToken == myToken then Bot.IsHoldingLaser = false end
+    end)
+end
+
+local function shootTarget(target)
+    if not isValidEnemy(target) then return end
+    local tool, remote = getWeapon()
+    if not tool or not remote then return end
+    local part = getShootPart(target)
+    if not part then return end
+    local isLaser = tool:FindFirstChild("Shoot") ~= nil
+    if isLaser then
+        holdLaser(remote, target)
+    else
+        pcall(function() remote:FireServer(part.Position) end)
+    end
+    Bot.LastActionTime = tick()
+end
+
+local function useAbility()
+    if not Bot.UseAbilities then return end
+    local now = tick()
+    if now - Bot.LastAbility < Bot.AbilityCooldown then return end
+    Bot.LastAbility = now
+    if Bot.AbilityMode == "Cycle" then
+        local k = Bot.AbilityKeys[Bot.AbilityIndex]
+        VIM:SendKeyEvent(true, k, false, nil)
+        task.wait(0.08)
+        VIM:SendKeyEvent(false, k, false, nil)
+        Bot.AbilityIndex = (Bot.AbilityIndex % #Bot.AbilityKeys) + 1
+    else
+        for _, k in ipairs(Bot.AbilityKeys) do
+            VIM:SendKeyEvent(true, k, false, nil)
+            task.wait(0.08)
+            VIM:SendKeyEvent(false, k, false, nil)
+        end
+    end
+    Bot.LastActionTime = tick()
+end
+
+local function moveWithPath(hum, myRoot, targetPos, stopRadius)
+    local hd = hDist(myRoot.Position, targetPos)
+    if hd <= stopRadius then
+        Bot.Waypoints = {}
+        Bot.WaypointIndex = 1
+        return
+    end
+
+    if not Bot.UsePathfinding then
+        hum:MoveTo(targetPos)
+        return
+    end
+
+    if #Bot.Waypoints > 0 and Bot.WaypointIndex <= #Bot.Waypoints then
+        local wp = Bot.Waypoints[Bot.WaypointIndex]
+        if wp then
+            if hDist(myRoot.Position, wp.Position) < 6 then
+                Bot.WaypointIndex = Bot.WaypointIndex + 1
+                wp = Bot.Waypoints[Bot.WaypointIndex]
+            end
+            if wp then
+                hum:MoveTo(wp.Position)
+                if wp.Action == Enum.PathWaypointAction.Jump then
+                    hum.Jump = true
+                end
+                return
+            end
+        end
+    end
+
+    hum:MoveTo(targetPos)
+
+    if Bot.PathComputing then return end
+    local now = tick()
+    if now - Bot.LastPathTime < 0.4 then return end
+    Bot.LastPathTime = now
+    Bot.PathComputing = true
+
+    local startPos = myRoot.Position
+    task.spawn(function()
+        pcall(function()
+            local path = PathService:CreatePath({
+                AgentRadius = 2,
+                AgentHeight = 5,
+                AgentCanJump = true,
+                AgentCanClimb = false
+            })
+            path:ComputeAsync(startPos, targetPos)
+            if path.Status == Enum.PathStatus.Success then
+                local wps = path:GetWaypoints()
+                if #wps >= 2 then
+                    Bot.Waypoints = wps
+                    Bot.WaypointIndex = 2
+                end
+            end
+        end)
+        Bot.PathComputing = false
+    end)
+end
+
+local function humanKite(hum, myRoot, targetPos, now)
+    local hd = hDist(myRoot.Position, targetPos)
+
+    if now - Bot.LastStrafeFlip > 1.4 then
+        Bot.LastStrafeFlip = now
+        Bot.StrafeDir = -Bot.StrafeDir
+    end
+
+    if hd < Bot.KeepDistance then
+        Bot.State = "RETREAT"
+        local away = myRoot.Position - targetPos
+        local flat = Vector3.new(away.X, 0, away.Z)
+        if flat.Magnitude < 0.1 then flat = Vector3.new(1, 0, 0) end
+        flat = flat.Unit
+        local escapeDist = (Bot.KeepDistance - hd) + 20
+        hum:MoveTo(myRoot.Position + flat * escapeDist)
+        Bot.Waypoints = {}
+        Bot.WaypointIndex = 1
+        return
+    end
+
+    if hd > Bot.ShootRange then
+        Bot.State = "ADVANCE"
+        local toTarget = targetPos - myRoot.Position
+        local flat = Vector3.new(toTarget.X, 0, toTarget.Z)
+        if flat.Magnitude < 0.1 then return end
+        flat = flat.Unit
+        local stopPos = targetPos - flat * (Bot.ShootRange * 0.85)
+        moveWithPath(hum, myRoot, stopPos, 8)
+        return
+    end
+
+    Bot.State = "ORBIT"
+    local toTarget = targetPos - myRoot.Position
+    local flat = Vector3.new(toTarget.X, 0, toTarget.Z)
+    if flat.Magnitude < 0.1 then return end
+    local dir = flat.Unit
+    local perp = Vector3.new(-dir.Z, 0, dir.X) * Bot.StrafeDir
+    local radialCorrection = 0
+    if hd > Bot.KeepDistance + 10 then
+        radialCorrection = 0.4
+    elseif hd < Bot.KeepDistance + 5 then
+        radialCorrection = -0.4
+    end
+    local radial = dir * radialCorrection
+    local moveVec = perp + radial
+    if moveVec.Magnitude > 0.1 then
+        hum:MoveTo(myRoot.Position + moveVec.Unit * Bot.StrafeSpeed)
+    end
+    Bot.Waypoints = {}
+    Bot.WaypointIndex = 1
+end
+
+local function titanRush(hum, myRoot, targetPos)
+    Bot.State = "TITAN RUSH"
+    moveWithPath(hum, myRoot, targetPos, 3)
+end
+
+local function checkStuck(myRoot)
+    local now = tick()
+    if now - Bot.LastStuckCheck > 0.6 then
+        Bot.LastStuckCheck = now
+        if Bot.LastPos then
+            local moved = (myRoot.Position - Bot.LastPos).Magnitude
+            if moved < 2 then
+                Bot.StuckTimer = Bot.StuckTimer + 0.6
+            else
+                Bot.StuckTimer = 0
+            end
+        end
+        Bot.LastPos = myRoot.Position
+        if Bot.StuckTimer > 1.8 then
+            Bot.StuckTimer = 0
+            return true
+        end
+    end
+    return false
+end
+
+local function unstuck(hum, myRoot)
+    hum.Jump = true
+    task.wait(0.05)
+    local ang = math.random(-90, 90)
+    local dir = Vector3.new(math.sin(math.rad(ang)), 0, math.cos(math.rad(ang)))
+    hum:MoveTo(myRoot.Position + dir * 25)
+    Bot.Waypoints = {}
+    Bot.WaypointIndex = 1
+end
+
+local function getAnchorPos(anchor)
+    if not anchor then return nil end
+    if anchor:IsA("BasePart") then return anchor.Position end
+    if anchor:IsA("Attachment") then return anchor.WorldPosition end
+    local part = anchor:FindFirstChildWhichIsA("BasePart", true)
+    if part then return part.Position end
+    return nil
+end
+
+local function findDownedPlayer()
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character then
+            local anchor = plr.Character:FindFirstChild("RevivePromptAnchor", true)
+            if anchor then
+                local prompt = anchor:FindFirstChildWhichIsA("ProximityPrompt", true)
+                if prompt and prompt.Enabled then
+                    local pos = getAnchorPos(anchor)
+                    if pos then
+                        return {player = plr, anchor = anchor, prompt = prompt, pos = pos}
+                    end
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function triggerPrompt(prompt)
+    if typeof(fireproximityprompt) == "function" then
+        pcall(fireproximityprompt, prompt)
+        return
+    end
+    pcall(function()
+        prompt:InputHoldBegin()
+        task.wait(prompt.HoldDuration or 0.1)
+        prompt:InputHoldEnd()
+    end)
+end
+
+local function hasImmediateThreat(myPos, radius)
+    if not AIFolder then return false end
+    for _, npc in ipairs(AIFolder:GetChildren()) do
+        if npc:IsA("Model") and isEnemy(npc) and isValidEnemy(npc) then
+            local r = getRoot(npc)
+            if r and hDist(myPos, r.Position) < radius then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function doDamageTeleport()
+    local now = tick()
+    if now - DamageTP.LastTP < DamageTP.Cooldown then return end
+    local char = LocalPlayer.Character
+    local myRoot = char and char:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return end
+    DamageTP.LastTP = now
+
+    local currentPos = myRoot.Position
+    local currentY = currentPos.Y
+
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    local ignored = WS:FindFirstChild("Ignored")
+    local filter = {char}
+    if ignored then table.insert(filter, ignored) end
+    rayParams.FilterDescendantsInstances = filter
+
+    for attempt = 1, 20 do
+        local angle = math.random() * math.pi * 2
+        local dist = DamageTP.Distance * (0.6 + math.random() * 0.6)
+        local dx = math.cos(angle) * dist
+        local dz = math.sin(angle) * dist
+        local destX = currentPos.X + dx
+        local destZ = currentPos.Z + dz
+        local horiz = WS:Raycast(currentPos, Vector3.new(dx, 0, dz), rayParams)
+        if not horiz then
+            local floorRay = WS:Raycast(Vector3.new(destX, currentY + 15, destZ), Vector3.new(0, -50, 0), rayParams)
+            if floorRay then
+                local newY = floorRay.Position.Y + 3.5
+                if math.abs(newY - currentY) < 10 then
+                    myRoot.CFrame = CFrame.new(destX, newY, destZ)
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+local function bindDamage()
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    local lastHealth = hum.Health
+    hum.HealthChanged:Connect(function(hp)
+        if hp < lastHealth and DamageTP.Enabled and Bot.Enabled then
+            task.spawn(doDamageTeleport)
+        end
+        lastHealth = hp
+    end)
+end
+
+local function runBot()
+    if not Bot.Enabled then return end
+    local now = tick()
+
+    if now - Bot.LastTitanCheck > 0.5 then
+        Bot.LastTitanCheck = now
+        Bot.IsTitan = isTitan()
+    end
+
+    local myRoot = getMyRoot()
+    local hum = getMyHum()
+    if not myRoot or not hum or hum.Health <= 0 then
+        Bot.State = "DEAD"
+        if Bot.IsHoldingLaser then
+            local _, r = getWeapon()
+            endLaser(r)
+        end
+        return
+    end
+
+    if Auto.ReviveEnabled then
+        local downed = findDownedPlayer()
+        if downed and not hasImmediateThreat(myRoot.Position, 30) then
+            local dist = hDist(myRoot.Position, downed.pos)
+            if dist > (downed.prompt.MaxActivationDistance or 10) * 0.8 then
+                Bot.State = "REVIVE MOVE"
+                hum:MoveTo(downed.pos)
+                Bot.Waypoints = {}
+                Bot.WaypointIndex = 1
+                return
+            else
+                Bot.State = "REVIVING"
+                triggerPrompt(downed.prompt)
+                task.wait(0.15)
+                return
+            end
+        end
+    end
+
+    if now - Bot.LastTargetScan > 0.5 then
+        Bot.LastTargetScan = now
+        if not isValidEnemy(Bot.Target) then
+            Bot.Target = findNearestEnemy()
+            Bot.Waypoints = {}
+            Bot.WaypointIndex = 1
+        end
+    end
+
+    if not isValidEnemy(Bot.Target) then
+        Bot.Target = nil
+        if Bot.IsHoldingLaser then
+            local _, r = getWeapon()
+            endLaser(r)
+        end
+        if now - Bot.LastActionTime > 2 then
+            Bot.Target = findNearestEnemy()
+            Bot.Waypoints = {}
+            Bot.WaypointIndex = 1
+        end
+        if not Bot.Target then
+            Bot.State = "NO TARGET"
+            return
+        end
+    end
+
+    local targetRoot = getRoot(Bot.Target)
+    if not targetRoot then return end
+
+    local hd = hDist(myRoot.Position, targetRoot.Position)
+
+    if Bot.IsTitan then
+        titanRush(hum, myRoot, targetRoot.Position)
+        if hd <= Bot.KeepDistance + 10 then
+            useAbility()
+        end
+    else
+        humanKite(hum, myRoot, targetRoot.Position, now)
+        if hd <= Bot.ShootRange then
+            if not Bot.IsHoldingLaser then
+                if now - Bot.LastShoot >= Bot.AttackInterval then
+                    Bot.LastShoot = now
+                    shootTarget(Bot.Target)
+                end
+            else
+                if now - Bot.LaserStart > Bot.LaserHoldTime + 3 then
+                    local _, r = getWeapon()
+                    endLaser(r)
+                end
+            end
+        end
+    end
+
+    if checkStuck(myRoot) then
+        unstuck(hum, myRoot)
+    end
+
+    if now - Bot.LastActionTime > 8 then
+        Bot.LastActionTime = now
+        Bot.Target = nil
+        Bot.Waypoints = {}
+        Bot.WaypointIndex = 1
+    end
+end
+
+RS.Heartbeat:Connect(function()
+    pcall(runBot)
+end)
+
+local function findRemote(name)
+    local ev = ReplicatedStorage:FindFirstChild("Events")
+    if not ev then return nil end
+    local r = ev:FindFirstChild(name)
+    if r and r:IsA("RemoteEvent") then return r end
+    return nil
+end
+
+task.spawn(function()
+    Auto.ReadyRemote = findRemote("Ready")
+    Auto.AFKRemote = ReplicatedStorage:FindFirstChild("AFKCheckEvent")
+    Auto.PartnerDiedRemote = findRemote("PartnerDied")
+    Auto.RemoveRemote = findRemote("RemovePartner")
+
+    if not Auto.AFKRemote then
+        Auto.AFKRemote = ReplicatedStorage:WaitForChild("AFKCheckEvent", 15)
+    end
+
+    if Auto.AFKRemote then
+        Auto.AFKRemote.OnClientEvent:Connect(function()
+            if not Auto.AFKEnabled then return end
+            task.wait(0.05)
+            pcall(function() Auto.AFKRemote:FireServer(true) end)
+            local gui = PlayerGui:FindFirstChild("AFKCheckGui")
+            if gui then gui:Destroy() end
+        end)
+    end
+
+    if Auto.PartnerDiedRemote then
+        Auto.PartnerDiedRemote.OnClientEvent:Connect(function()
+            if not Auto.PartnerDropEnabled then return end
+            if Auto.RemoveRemote then
+                task.wait(0.8)
+                pcall(function() Auto.RemoveRemote:FireServer() end)
+            end
+        end)
+    end
+end)
+
+PlayerGui.ChildAdded:Connect(function(child)
+    if not Auto.AFKEnabled then return end
+    if child.Name == "AFKCheckGui" then
+        task.wait(0.1)
+        if Auto.AFKRemote then pcall(function() Auto.AFKRemote:FireServer(true) end) end
+        if child and child.Parent then child:Destroy() end
+    end
+end)
+
+RS.Heartbeat:Connect(function()
+    if not Auto.ReadyEnabled then return end
+    if not Auto.ReadyRemote then
+        Auto.ReadyRemote = findRemote("Ready")
+        return
+    end
+    local now = tick()
+    if now - Auto.LastReadyFire < 1 then return end
+    local char = LocalPlayer.Character
+    if not char then return end
+    local status = char:FindFirstChild("Status")
+    if status then
+        local deployed = status:FindFirstChild("Deployed")
+        if deployed and deployed:IsA("BoolValue") and not deployed.Value then
+            Auto.LastReadyFire = now
+            pcall(function() Auto.ReadyRemote:FireServer() end)
+        end
+    end
+end)
+
+local function onCharAdded(c)
+    task.wait(1)
+    bindDamage()
+end
+
+if LocalPlayer.Character then bindDamage() end
+LocalPlayer.CharacterAdded:Connect(onCharAdded)
+
+local GUI = Instance.new("ScreenGui")
+GUI.Name = "AutoFarmBot"
+GUI.ResetOnSpawn = false
+GUI.IgnoreGuiInset = true
+GUI.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+GUI.Parent = CG
+
+local NFs = Instance.new("Frame")
+NFs.AnchorPoint = Vector2.new(0.5, 0)
+NFs.Position = UDim2.new(0.5, 0, 0.05, 0)
+NFs.Size = UDim2.new(0, 260, 0, 0)
+NFs.BackgroundTransparency = 1
+NFs.ZIndex = 100
+NFs.Parent = GUI
+local NList = Instance.new("UIListLayout")
+NList.Padding = UDim.new(0, 5)
+NList.SortOrder = Enum.SortOrder.LayoutOrder
+NList.Parent = NFs
+
+local function Notify(t, x, d)
+    d = d or 3
+    PlaySound(MsgSound)
+    local nf = Instance.new("Frame")
+    nf.Size = UDim2.new(1, 0, 0, 45)
+    nf.BackgroundColor3 = Color3.fromRGB(20, 30, 40)
+    nf.BorderSizePixel = 0
+    nf.ZIndex = 100
+    nf.Parent = NFs
+    Instance.new("UICorner", nf).CornerRadius = UDim.new(0, 6)
+    local st = Instance.new("UIStroke")
+    st.Color = HubC
+    st.Transparency = 0.3
+    st.Thickness = 1
+    st.Parent = nf
+    local ab = Instance.new("Frame")
+    ab.Size = UDim2.new(0, 2, 1, 0)
+    ab.BackgroundColor3 = HubC
+    ab.BorderSizePixel = 0
+    ab.ZIndex = 101
+    ab.Parent = nf
+    local tl = Instance.new("TextLabel")
+    tl.Size = UDim2.new(1, -20, 0, 18)
+    tl.Position = UDim2.new(0, 12, 0, 5)
+    tl.BackgroundTransparency = 1
+    tl.TextXAlignment = Enum.TextXAlignment.Left
+    tl.TextColor3 = Color3.fromRGB(255, 255, 255)
+    tl.Font = Enum.Font.GothamBold
+    tl.TextSize = 13
+    tl.Text = t
+    tl.ZIndex = 101
+    tl.Parent = nf
+    local xl = Instance.new("TextLabel")
+    xl.Size = UDim2.new(1, -20, 0, 18)
+    xl.Position = UDim2.new(0, 12, 0, 24)
+    xl.BackgroundTransparency = 1
+    xl.TextXAlignment = Enum.TextXAlignment.Left
+    xl.TextColor3 = Color3.fromRGB(180, 200, 230)
+    xl.Font = Enum.Font.Gotham
+    xl.TextSize = 11
+    xl.Text = x
+    xl.ZIndex = 101
+    xl.Parent = nf
+    nf.Position = UDim2.new(0, 0, 0, -50)
+    TS:Create(nf, TweenInfo.new(0.3), {Position = UDim2.new(0, 0, 0, 0)}):Play()
+    task.delay(d, function()
+        TS:Create(nf, TweenInfo.new(0.3), {Position = UDim2.new(0, 0, 0, -50)}):Play()
+        PlaySound(UIDisappear)
+        task.wait(0.3)
+        nf:Destroy()
+    end)
+end
+
+local isMobile = UIS.TouchEnabled and not UIS.KeyboardEnabled
+local winW = isMobile and 340 or 440
+local winH = isMobile and 480 or 580
+
+local Win = Instance.new("Frame")
+Win.Size = UDim2.new(0, winW, 0, winH)
+Win.Position = UDim2.new(0.5, -winW / 2, 0.5, -winH / 2)
+Win.BackgroundColor3 = BG
+Win.BorderSizePixel = 0
+Win.Active = true
+Win.ZIndex = 10
+Win.Parent = GUI
+Instance.new("UICorner", Win).CornerRadius = UDim.new(0, 12)
+local wsh = Instance.new("UIStroke")
+wsh.Color = HubC
+wsh.Transparency = 0.2
+wsh.Thickness = 2
+wsh.Parent = Win
+
+local TB = Instance.new("Frame")
+TB.Size = UDim2.new(1, 0, 0, isMobile and 44 or 40)
+TB.BackgroundColor3 = BG2
+TB.BorderSizePixel = 0
+TB.ZIndex = 11
+TB.Parent = Win
+Instance.new("UICorner", TB).CornerRadius = UDim.new(0, 12)
+local tbf = Instance.new("Frame")
+tbf.Size = UDim2.new(1, 0, 0.5, 0)
+tbf.Position = UDim2.new(0, 0, 0.5, 0)
+tbf.BackgroundColor3 = BG2
+tbf.BorderSizePixel = 0
+tbf.ZIndex = 11
+tbf.Parent = TB
+
+local TT = Instance.new("TextLabel")
+TT.Size = UDim2.new(1, -110, 1, 0)
+TT.Position = UDim2.new(0, 14, 0, 0)
+TT.BackgroundTransparency = 1
+TT.TextXAlignment = Enum.TextXAlignment.Left
+TT.TextColor3 = Color3.fromRGB(255, 255, 255)
+TT.Font = Enum.Font.GothamBold
+TT.TextSize = 13
+TT.Text = "AUTO FARM BOT"
+TT.ZIndex = 12
+TT.Parent = TB
+
+local StatusLabel = Instance.new("TextLabel")
+StatusLabel.Size = UDim2.new(1, -20, 0, 20)
+StatusLabel.Position = UDim2.new(0, 14, 1, 2)
+StatusLabel.BackgroundTransparency = 1
+StatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+StatusLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+StatusLabel.Font = Enum.Font.Gotham
+StatusLabel.TextSize = 11
+StatusLabel.Text = "IDLE"
+StatusLabel.ZIndex = 12
+StatusLabel.Parent = Win
+
+local CB = Instance.new("TextButton")
+CB.Size = UDim2.new(0, isMobile and 30 or 22, 0, isMobile and 30 or 22)
+CB.Position = UDim2.new(1, -35, 0.5, isMobile and -15 or -11)
+CB.BackgroundColor3 = HubC
+CB.BorderSizePixel = 0
+CB.Text = "×"
+CB.TextColor3 = Color3.fromRGB(255, 255, 255)
+CB.Font = Enum.Font.GothamBold
+CB.TextSize = 14
+CB.AutoButtonColor = false
+CB.ZIndex = 12
+CB.Parent = TB
+Instance.new("UICorner", CB).CornerRadius = UDim.new(0, 4)
+
+local HB = Instance.new("TextButton")
+HB.Size = UDim2.new(0, isMobile and 30 or 22, 0, isMobile and 30 or 22)
+HB.Position = UDim2.new(1, -70, 0.5, isMobile and -15 or -11)
+HB.BackgroundColor3 = Color3.fromRGB(100, 150, 200)
+HB.BorderSizePixel = 0
+HB.Text = "—"
+HB.TextColor3 = Color3.fromRGB(255, 255, 255)
+HB.Font = Enum.Font.GothamBold
+HB.TextSize = 12
+HB.AutoButtonColor = false
+HB.ZIndex = 12
+HB.Parent = TB
+Instance.new("UICorner", HB).CornerRadius = UDim.new(0, 4)
+
+local FloatBtn = Instance.new("TextButton")
+FloatBtn.Size = UDim2.new(0, 50, 0, 50)
+FloatBtn.Position = UDim2.new(0, 16, 0.5, -25)
+FloatBtn.BackgroundColor3 = HubC
+FloatBtn.BorderSizePixel = 0
+FloatBtn.Text = "F"
+FloatBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+FloatBtn.Font = Enum.Font.GothamBold
+FloatBtn.TextSize = 20
+FloatBtn.AutoButtonColor = false
+FloatBtn.Visible = false
+FloatBtn.ZIndex = 200
+FloatBtn.Parent = GUI
+Instance.new("UICorner", FloatBtn).CornerRadius = UDim.new(1, 0)
+local fs = Instance.new("UIStroke")
+fs.Color = Color3.fromRGB(255, 255, 255)
+fs.Transparency = 0.5
+fs.Thickness = 2
+fs.Parent = FloatBtn
+
+local floatDragging, floatDragStart, floatStartPos, floatMoved = false, nil, nil, false
+FloatBtn.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        floatDragging = true
+        floatDragStart = input.Position
+        floatStartPos = FloatBtn.Position
+        floatMoved = false
+    end
+end)
+UIS.InputChanged:Connect(function(input)
+    if not floatDragging then return end
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        local delta = input.Position - floatDragStart
+        if math.abs(delta.X) > 6 or math.abs(delta.Y) > 6 then floatMoved = true end
+        FloatBtn.Position = UDim2.new(floatStartPos.X.Scale, floatStartPos.X.Offset + delta.X, floatStartPos.Y.Scale, floatStartPos.Y.Offset + delta.Y)
+    end
+end)
+UIS.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        if floatDragging and not floatMoved then
+            PlaySound(ClickSound)
+            Win.Visible = true
+            FloatBtn.Visible = false
+        end
+        floatDragging = false
+    end
+end)
+
+HB.MouseButton1Click:Connect(function()
+    PlaySound(ClickSound)
+    Win.Visible = false
+    FloatBtn.Visible = true
+end)
+CB.MouseButton1Click:Connect(function()
+    PlaySound(ClickSound)
+    Win.Visible = false
+    FloatBtn.Visible = true
+end)
+
+local dragging, dragStart, startPos = false, nil, nil
+TB.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = Win.Position
+    end
+end)
+UIS.InputChanged:Connect(function(input)
+    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - dragStart
+        Win.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+UIS.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+    end
+end)
+
+local CA = Instance.new("ScrollingFrame")
+CA.Size = UDim2.new(1, -20, 1, -TB.Size.Y.Offset - 32)
+CA.Position = UDim2.new(0, 10, 0, TB.Size.Y.Offset + 26)
+CA.BackgroundTransparency = 1
+CA.BorderSizePixel = 0
+CA.ScrollBarThickness = isMobile and 4 or 2
+CA.ScrollBarImageColor3 = HubC
+CA.CanvasSize = UDim2.new(0, 0, 0, 0)
+CA.Parent = Win
+local cl = Instance.new("UIListLayout")
+cl.Padding = UDim.new(0, 5)
+cl.Parent = CA
+cl:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+    CA.CanvasSize = UDim2.new(0, 0, 0, cl.AbsoluteContentSize.Y + 10)
+end)
+
+local function Section(text)
+    local s = Instance.new("Frame")
+    s.Size = UDim2.new(1, 0, 0, 20)
+    s.BackgroundTransparency = 1
+    s.Parent = CA
+    local st = Instance.new("TextLabel")
+    st.Size = UDim2.new(1, 0, 1, 0)
+    st.BackgroundTransparency = 1
+    st.TextXAlignment = Enum.TextXAlignment.Left
+    st.TextColor3 = HubA
+    st.Font = Enum.Font.GothamBold
+    st.TextSize = 11
+    st.Text = text
+    st.Parent = s
+    local l = Instance.new("Frame")
+    l.Size = UDim2.new(1, 0, 0, 1)
+    l.Position = UDim2.new(0, 0, 0, 19)
+    l.BackgroundColor3 = HubC
+    l.BorderSizePixel = 0
+    l.Parent = s
+end
+
+local function Desc(text)
+    local l = Instance.new("TextLabel")
+    l.Size = UDim2.new(1, 0, 0, 28)
+    l.BackgroundTransparency = 1
+    l.TextXAlignment = Enum.TextXAlignment.Left
+    l.TextWrapped = true
+    l.TextColor3 = Color3.fromRGB(150, 170, 200)
+    l.Font = Enum.Font.Gotham
+    l.TextSize = 9
+    l.Text = text
+    l.Parent = CA
+end
+
+local function Toggle(name, default, cb)
+    local tf = Instance.new("Frame")
+    tf.Size = UDim2.new(1, 0, 0, isMobile and 36 or 30)
+    tf.BackgroundColor3 = BG3
+    tf.BorderSizePixel = 0
+    tf.Parent = CA
+    Instance.new("UICorner", tf).CornerRadius = UDim.new(0, 6)
+    local tl = Instance.new("TextLabel")
+    tl.Size = UDim2.new(1, -60, 1, 0)
+    tl.Position = UDim2.new(0, 10, 0, 0)
+    tl.BackgroundTransparency = 1
+    tl.TextXAlignment = Enum.TextXAlignment.Left
+    tl.TextColor3 = TXT
+    tl.Font = Enum.Font.Gotham
+    tl.TextSize = isMobile and 11 or 10
+    tl.Text = name
+    tl.Parent = tf
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0, isMobile and 42 or 36, 0, isMobile and 22 or 18)
+    btn.Position = UDim2.new(1, isMobile and -48 or -42, 0.5, isMobile and -11 or -9)
+    btn.BackgroundColor3 = default and HubC or Color3.fromRGB(50, 60, 75)
+    btn.BorderSizePixel = 0
+    btn.Text = ""
+    btn.AutoButtonColor = false
+    btn.Parent = tf
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(1, 0)
+    local dotSize = isMobile and 18 or 14
+    local dot = Instance.new("Frame")
+    dot.Size = UDim2.new(0, dotSize, 0, dotSize)
+    dot.Position = default and UDim2.new(1, -dotSize - 2, 0.5, -dotSize / 2) or UDim2.new(0, 2, 0.5, -dotSize / 2)
+    dot.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    dot.BorderSizePixel = 0
+    dot.Parent = btn
+    Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
+    local toggled = default or false
+    btn.MouseButton1Click:Connect(function()
+        PlaySound(ClickSound)
+        toggled = not toggled
+        TS:Create(btn, TweenInfo.new(0.2), {BackgroundColor3 = toggled and HubC or Color3.fromRGB(50, 60, 75)}):Play()
+        TS:Create(dot, TweenInfo.new(0.2), {Position = toggled and UDim2.new(1, -dotSize - 2, 0.5, -dotSize / 2) or UDim2.new(0, 2, 0.5, -dotSize / 2)}):Play()
+        local fn = cb
+        fn(toggled)
+    end)
+end
+
+local function Slider(name, min, max, default, decimals, cb)
+    local sf = Instance.new("Frame")
+    sf.Size = UDim2.new(1, 0, 0, isMobile and 48 or 40)
+    sf.BackgroundColor3 = BG3
+    sf.BorderSizePixel = 0
+    sf.Parent = CA
+    Instance.new("UICorner", sf).CornerRadius = UDim.new(0, 6)
+    local sl = Instance.new("TextLabel")
+    sl.Size = UDim2.new(1, -10, 0, 16)
+    sl.Position = UDim2.new(0, 5, 0, 2)
+    sl.BackgroundTransparency = 1
+    sl.TextXAlignment = Enum.TextXAlignment.Left
+    sl.TextColor3 = TXT
+    sl.Font = Enum.Font.Gotham
+    sl.TextSize = 9
+    sl.Text = name .. ": " .. default
+    sl.Parent = sf
+    local sb = Instance.new("TextButton")
+    sb.Size = UDim2.new(1, -10, 0, isMobile and 8 or 5)
+    sb.Position = UDim2.new(0, 5, 0, isMobile and 26 or 22)
+    sb.BackgroundColor3 = Color3.fromRGB(50, 60, 75)
+    sb.BorderSizePixel = 0
+    sb.Text = ""
+    sb.AutoButtonColor = false
+    sb.Parent = sf
+    Instance.new("UICorner", sb).CornerRadius = UDim.new(1, 0)
+    local sbf = Instance.new("Frame")
+    sbf.Size = UDim2.new((default - min) / (max - min), 0, 1, 0)
+    sbf.BackgroundColor3 = HubC
+    sbf.BorderSizePixel = 0
+    sbf.Parent = sb
+    Instance.new("UICorner", sbf).CornerRadius = UDim.new(1, 0)
+    local dragging = false
+    local function update(pct)
+        local v = min + (max - min) * pct
+        if decimals == 0 then
+            v = math.floor(v)
+        else
+            v = math.floor(v * (10 ^ decimals)) / (10 ^ decimals)
+        end
+        sbf.Size = UDim2.new(pct, 0, 1, 0)
+        sl.Text = name .. ": " .. v
+        local fn = cb
+        fn(v)
+    end
+    local function touchUpdate(input)
+        local bp = sb.AbsolutePosition
+        local bs = sb.AbsoluteSize
+        update(math.clamp((input.Position.X - bp.X) / bs.X, 0, 1))
+    end
+    sb.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            PlaySound(SliderSound)
+            dragging = true
+            touchUpdate(input)
+        end
+    end)
+    UIS.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            touchUpdate(input)
+        end
+    end)
+    UIS.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+end
+
+local function Button(name, cb)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(1, 0, 0, isMobile and 36 or 28)
+    b.BackgroundColor3 = BG3
+    b.BorderSizePixel = 0
+    b.Text = name
+    b.TextColor3 = TXT
+    b.Font = Enum.Font.Gotham
+    b.TextSize = isMobile and 11 or 10
+    b.AutoButtonColor = false
+    b.Parent = CA
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+    b.MouseButton1Click:Connect(function()
+        PlaySound(ClickSound)
+        local fn = cb
+        fn()
+    end)
+end
+
+Section("Bot")
+Desc("Targets Bathub NPCs only. Human circles & shoots. Titan rushes & uses abilities.")
+Toggle("Enable Bot", false, function(v)
+    Bot.Enabled = v
+    if v then
+        Bot.Target = nil
+        Bot.Waypoints = {}
+        Bot.WaypointIndex = 1
+        Bot.LastPos = nil
+        Bot.StuckTimer = 0
+        Bot.LastActionTime = tick()
+        Notify("Bot", "Enabled", 2)
+    else
+        if Bot.IsHoldingLaser then
+            local _, r = getWeapon()
+            endLaser(r)
+        end
+        Bot.Target = nil
+        Bot.Waypoints = {}
+        Bot.WaypointIndex = 1
+        Notify("Bot", "Disabled", 2)
+    end
+end)
+
+Section("Distance")
+Slider("Keep Distance", 20, 150, 60, 0, function(v) Bot.KeepDistance = v end)
+Slider("Shoot Range", 30, 300, 120, 0, function(v) Bot.ShootRange = v end)
+Slider("Strafe Speed", 5, 40, 16, 0, function(v) Bot.StrafeSpeed = v end)
+Slider("Attack Interval", 0.1, 3, 0.3, 2, function(v) Bot.AttackInterval = v end)
+Slider("Laser Hold Time", 0.1, 15, 0.5, 2, function(v) Bot.LaserHoldTime = v end)
+
+Section("Movement")
+Toggle("Use Pathfinding", true, function(v) Bot.UsePathfinding = v end)
+
+Section("Titan Abilities")
+Toggle("Use Abilities", true, function(v) Bot.UseAbilities = v end)
+Slider("Ability Cooldown", 0.5, 5, 1.5, 1, function(v) Bot.AbilityCooldown = v end)
+Button("Mode: Cycle", function() Bot.AbilityMode = "Cycle" Notify("Bot", "Cycle mode", 2) end)
+Button("Mode: All", function() Bot.AbilityMode = "All" Notify("Bot", "All mode", 2) end)
+
+Section("Survival")
+Toggle("Damage Teleport", false, function(v)
+    DamageTP.Enabled = v
+    Notify("Damage TP", v and "Enabled" or "Disabled", 2)
+end)
+Slider("Teleport Distance", 15, 60, 30, 0, function(v) DamageTP.Distance = v end)
+
+Section("Auto Functions")
+Toggle("Auto Join Game (Ready)", false, function(v)
+    Auto.ReadyEnabled = v
+    Notify("Auto Ready", v and "Enabled" or "Disabled", 2)
+end)
+Toggle("Auto Pass AFK Puzzle", false, function(v)
+    Auto.AFKEnabled = v
+    Notify("Auto AFK", v and "Enabled" or "Disabled", 2)
+    if v then
+        local gui = PlayerGui:FindFirstChild("AFKCheckGui")
+        if gui then gui:Destroy() end
+    end
+end)
+Toggle("Auto Drop Partner On Death", false, function(v)
+    Auto.PartnerDropEnabled = v
+    Notify("Auto Drop Partner", v and "Enabled" or "Disabled", 2)
+end)
+Toggle("Auto Revive Downed Players", false, function(v)
+    Auto.ReviveEnabled = v
+    Notify("Auto Revive", v and "Enabled" or "Disabled", 2)
+end)
+
+Section("Controls")
+Button("Reset Target", function()
+    Bot.Target = nil
+    Bot.Waypoints = {}
+    Bot.WaypointIndex = 1
+    Bot.LastActionTime = tick()
+    Notify("Bot", "Target reset", 2)
+end)
+Button("Destroy Hub", function()
+    Bot.Enabled = false
+    Auto.ReadyEnabled = false
+    Auto.AFKEnabled = false
+    Auto.PartnerDropEnabled = false
+    Auto.ReviveEnabled = false
+    DamageTP.Enabled = false
+    if Bot.IsHoldingLaser then
+        local _, r = getWeapon()
+        endLaser(r)
+    end
+    GUI:Destroy()
+end)
+
+task.spawn(function()
+    while GUI.Parent do
+        local parts = {}
+        if Bot.Enabled then
+            parts[#parts + 1] = Bot.State
+            if Bot.IsTitan then
+                parts[#parts + 1] = "TITAN"
+            else
+                parts[#parts + 1] = "HUMAN"
+            end
+            local myRoot = getMyRoot()
+            local targetRoot = Bot.Target and getRoot(Bot.Target)
+            if myRoot and targetRoot then
+                parts[#parts + 1] = math.floor(hDist(myRoot.Position, targetRoot.Position)) .. " st"
+            end
+            local tool = getWeapon()
+            if tool then
+                local isLaser = tool:FindFirstChild("Shoot") ~= nil
+                parts[#parts + 1] = isLaser and "LASER" or "GUN"
+            else
+                parts[#parts + 1] = "NO WEAPON"
+            end
+            if Bot.PathComputing then
+                parts[#parts + 1] = "PATH..."
+            end
+            StatusLabel.Text = table.concat(parts, " • ")
+            StatusLabel.TextColor3 = Color3.fromRGB(120, 200, 120)
+        else
+            StatusLabel.Text = "IDLE"
+            StatusLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+        end
+        task.wait(0.2)
+    end
+end)
+
+PlaySound(UIAppear)
+Notify("AUTO FARM BOT", "Loaded", 3)
