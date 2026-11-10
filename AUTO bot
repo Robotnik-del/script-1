@@ -8,7 +8,6 @@ local WS = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local PathService = game:GetService("PathfindingService")
-local VIM = game:GetService("VirtualInputManager")
 
 local HubC = Color3.fromRGB(30, 144, 255)
 local HubA = Color3.fromRGB(173, 216, 230)
@@ -43,15 +42,18 @@ local Bot = {
     LaserHoldTime = 0.5,
     UsePathfinding = true,
     UseAbilities = true,
-    AbilityCooldown = 1.5,
+    AbilityCooldown = 0.8,
     AbilityMode = "Cycle",
     AbilityIndex = 1,
-    SkillKeys = {},
-    LastKeyRefresh = 0,
-    TitanKind = "NONE",
+    TitanAttackRange = 10,
+    GiantClickInterval = 0.3,
     GiantComboIndex = 1,
-    GiantLastClick = 0,
-    GiantClickInterval = 0.4,
+    LastGiantClick = 0,
+    TitanKind = "NONE",
+    ForceTitanKind = nil,
+    Debug = false,
+    LastSkill = "",
+    LastFireOk = false,
     Target = nil,
     LastTargetScan = 0,
     LastShoot = 0,
@@ -130,53 +132,29 @@ local function getMyHum()
     return c and c:FindFirstChildOfClass("Humanoid")
 end
 
-local function isTitan()
-    local char = LocalPlayer.Character
-    if not char then return false end
-    local infected = char:FindFirstChild("InfectedV")
-    if infected and infected:IsA("BoolValue") and infected.Value then return true end
-    if char:FindFirstChild("Titan") then return true end
-    return false
-end
-
 local function detectTitanKind()
     local char = LocalPlayer.Character
     if not char then return "NONE" end
-    local infected = char:FindFirstChild("InfectedV")
-    local titanFlag = (infected and infected:IsA("BoolValue") and infected.Value) or char:FindFirstChild("Titan")
-    if not titanFlag then return "NONE" end
 
-    if char:FindFirstChild("ClickAttack") then return "GIANT" end
+    local titanFolder = char:FindFirstChild("Titan")
+    local bladeMode = char:FindFirstChild("BladeMode")
+    local clickAttack = char:FindFirstChild("ClickAttack")
 
-    local remotes = ReplicatedStorage:FindFirstChild("CharacterRemotes")
-    if remotes then
-        local gs = remotes:FindFirstChild("Giant Screen")
-        if gs and gs:FindFirstChild("Click") then return "GIANT" end
-    end
+    local isTitan = titanFolder ~= nil or bladeMode ~= nil or clickAttack ~= nil
+    if not isTitan then return "NONE" end
 
+    if Bot.ForceTitanKind then return Bot.ForceTitanKind end
+
+    if bladeMode or clickAttack then return "GIANT" end
     return "DEFAULT"
 end
 
-local function refreshSkillKeys()
-    local keys = {}
-    local pg = LocalPlayer:FindFirstChild("PlayerGui")
-    local skillset = pg and pg:FindFirstChild("Skillset")
-    local deviceFrame = skillset and skillset:FindFirstChild("Device Frame")
-    local mainSkills = deviceFrame and deviceFrame:FindFirstChild("MainSkills")
-    if mainSkills then
-        for _, button in ipairs(mainSkills:GetChildren()) do
-            if button:IsA("ImageButton") then
-                local pressKey = button:FindFirstChild("PressKey")
-                if pressKey and pressKey:IsA("StringValue") and pressKey.Value ~= "" then
-                    local ok, kc = pcall(function() return Enum.KeyCode[pressKey.Value] end)
-                    if ok and kc then
-                        table.insert(keys, kc)
-                    end
-                end
-            end
-        end
-    end
-    Bot.SkillKeys = keys
+local function charCanAttack()
+    local char = LocalPlayer.Character
+    if not char then return false end
+    local using = char:FindFirstChild("UsingSkill")
+    if using and using:IsA("BoolValue") and using.Value then return false end
+    return true
 end
 
 local function isValidEnemy(npc)
@@ -242,6 +220,11 @@ local function getShootPart(target)
     return target:FindFirstChild("Head") or target:FindFirstChild("HumanoidRootPart")
 end
 
+local function getTargetPos(target)
+    local p = getShootPart(target)
+    return p and p.Position or nil
+end
+
 local function endLaser(remote)
     if remote then pcall(function() remote:FireServer("End") end) end
     Bot.IsHoldingLaser = false
@@ -303,36 +286,159 @@ local function shootTarget(target)
     Bot.LastActionTime = tick()
 end
 
-local function useAbility()
-    if not Bot.UseAbilities then return end
-    local now = tick()
-    if now - Bot.LastAbility < Bot.AbilityCooldown then return end
-    Bot.LastAbility = now
-    local keys = Bot.SkillKeys
-    if #keys == 0 then return end
-    if Bot.AbilityMode == "Cycle" then
-        local k = keys[((Bot.AbilityIndex - 1) % #keys) + 1]
-        VIM:SendKeyEvent(true, k, false, nil)
-        task.wait(0.06)
-        VIM:SendKeyEvent(false, k, false, nil)
-        Bot.AbilityIndex = (Bot.AbilityIndex % #keys) + 1
-    else
-        for _, k in ipairs(keys) do
-            VIM:SendKeyEvent(true, k, false, nil)
-            task.wait(0.05)
-            VIM:SendKeyEvent(false, k, false, nil)
+local function getSkillFolder()
+    local remotes = ReplicatedStorage:FindFirstChild("CharacterRemotes")
+    if not remotes then return nil end
+    local gs = remotes:FindFirstChild("Giant Screen")
+    if gs and gs:IsA("Folder") then return gs end
+    for _, child in ipairs(remotes:GetChildren()) do
+        if child:IsA("Folder") then
+            local hasRemote = false
+            for _, r in ipairs(child:GetChildren()) do
+                if r:IsA("RemoteEvent") then hasRemote = true break end
+            end
+            if hasRemote then return child end
         end
     end
-    Bot.LastActionTime = tick()
+    return nil
 end
 
-local function giantScreenClick()
+local function getSkillList()
+    local list = {}
+    local folder = getSkillFolder()
+    if not folder then return list end
+
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    local skillset = pg and pg:FindFirstChild("Skillset")
+    local device = skillset and skillset:FindFirstChild("Device Frame")
+    local mainSkills = device and device:FindFirstChild("MainSkills")
+    if not mainSkills then return list end
+
+    local char = LocalPlayer.Character
+    local cdFolder = char and char:FindFirstChild("CooldownsFolder")
+
+    for _, button in ipairs(mainSkills:GetChildren()) do
+        if button:IsA("ImageButton") then
+            local remote = folder:FindFirstChild(button.Name)
+            if remote and remote:IsA("RemoteEvent") then
+                local settings = button:FindFirstChild("Settings")
+                local sendPos = settings and settings:FindFirstChild("SendMousePosition")
+                local hold = settings and settings:FindFirstChild("Hold")
+                local cdVal = cdFolder and cdFolder:FindFirstChild(button.Name)
+                list[#list + 1] = {
+                    name = button.Name,
+                    remote = remote,
+                    sendPos = sendPos and sendPos:IsA("BoolValue") and sendPos.Value or false,
+                    hold = hold and hold:IsA("BoolValue") and hold.Value or false,
+                    cdValue = cdVal
+                }
+            end
+        end
+    end
+    return list
+end
+
+local function skillReady(skill)
+    if not skill.cdValue or not skill.cdValue:IsA("ValueBase") then return true end
+    return skill.cdValue.Value <= 0
+end
+
+local function fireSkill(skill, targetPos)
+    if not skill or not skill.remote or not skill.remote.Parent then return false end
+    if not skillReady(skill) then return false end
+
+    if skill.name == "Tackle" then
+        local myRoot = getMyRoot()
+        if myRoot and targetPos then
+            local dir = targetPos - myRoot.Position
+            if dir.Magnitude > 0.1 then
+                local ok = pcall(function() skill.remote:FireServer(dir.Unit) end)
+                if ok then
+                    Bot.LastSkill = skill.name
+                    Bot.LastFireOk = true
+                    return true
+                end
+            end
+        end
+        local cam = WS.CurrentCamera
+        if cam then
+            local ok = pcall(function() skill.remote:FireServer(cam.CFrame.LookVector) end)
+            if ok then
+                Bot.LastSkill = skill.name
+                Bot.LastFireOk = true
+                return true
+            end
+        end
+        return false
+    end
+
+    if skill.hold then
+        if skill.sendPos and targetPos then
+            local ok = pcall(function() skill.remote:FireServer(targetPos, 0.1) end)
+            if ok then Bot.LastSkill = skill.name Bot.LastFireOk = true return true end
+        else
+            local ok = pcall(function() skill.remote:FireServer(0.1) end)
+            if ok then Bot.LastSkill = skill.name Bot.LastFireOk = true return true end
+        end
+        return false
+    end
+
+    if skill.sendPos and targetPos then
+        local ok = pcall(function() skill.remote:FireServer(targetPos) end)
+        if ok then Bot.LastSkill = skill.name Bot.LastFireOk = true return true end
+        return false
+    end
+
+    local ok = pcall(function() skill.remote:FireServer() end)
+    if ok then Bot.LastSkill = skill.name Bot.LastFireOk = true return true end
+    return false
+end
+
+local function useSkill(target)
+    if not Bot.UseAbilities then return end
+    if not charCanAttack() then return end
+
     local now = tick()
-    if now - Bot.GiantLastClick < Bot.GiantClickInterval then return end
+    if now - Bot.LastAbility < Bot.AbilityCooldown then return end
+
+    local skills = getSkillList()
+    if #skills == 0 then
+        if Bot.Debug then warn("No skills found in Skillset UI") end
+        return
+    end
+
+    local targetPos = getTargetPos(target)
+
+    if Bot.AbilityMode == "Cycle" then
+        local n = #skills
+        for i = 0, n - 1 do
+            local idx = ((Bot.AbilityIndex - 1 + i) % n) + 1
+            local s = skills[idx]
+            if skillReady(s) and fireSkill(s, targetPos) then
+                Bot.LastAbility = now
+                Bot.AbilityIndex = (idx % n) + 1
+                if Bot.Debug then print("[Bot] Fired skill: " .. s.name) end
+                return
+            end
+        end
+    else
+        for _, s in ipairs(skills) do
+            if skillReady(s) then
+                fireSkill(s, targetPos)
+            end
+        end
+        Bot.LastAbility = now
+    end
+end
+
+local function giantClick()
+    if not charCanAttack() then return end
+    local now = tick()
+    if now - Bot.LastGiantClick < Bot.GiantClickInterval then return end
+
     local char = LocalPlayer.Character
     if not char then return end
     if char:FindFirstChildOfClass("Tool") then return end
-    if char:FindFirstChild("UsingSkill") and char.UsingSkill.Value then return end
 
     local remotes = ReplicatedStorage:FindFirstChild("CharacterRemotes")
     if not remotes then return end
@@ -341,10 +447,15 @@ local function giantScreenClick()
     local click = gs:FindFirstChild("Click")
     if not click or not click:IsA("RemoteEvent") then return end
 
-    pcall(function() click:FireServer(Bot.GiantComboIndex) end)
-    Bot.GiantComboIndex = Bot.GiantComboIndex == 1 and 2 or 1
-    Bot.GiantLastClick = now
-    Bot.LastActionTime = now
+    local ok = pcall(function() click:FireServer(Bot.GiantComboIndex) end)
+    if ok then
+        Bot.LastSkill = "Click" .. Bot.GiantComboIndex
+        Bot.LastFireOk = true
+        Bot.GiantComboIndex = Bot.GiantComboIndex == 1 and 2 or 1
+        Bot.LastGiantClick = now
+        Bot.LastActionTime = now
+        if Bot.Debug then print("[Bot] Giant Click combo index: " .. (Bot.GiantComboIndex == 1 and 2 or 1)) end
+    end
 end
 
 local function moveWithPath(hum, myRoot, targetPos, stopRadius)
@@ -354,12 +465,10 @@ local function moveWithPath(hum, myRoot, targetPos, stopRadius)
         Bot.WaypointIndex = 1
         return
     end
-
     if not Bot.UsePathfinding then
         hum:MoveTo(targetPos)
         return
     end
-
     if #Bot.Waypoints > 0 and Bot.WaypointIndex <= #Bot.Waypoints then
         local wp = Bot.Waypoints[Bot.WaypointIndex]
         if wp then
@@ -369,30 +478,23 @@ local function moveWithPath(hum, myRoot, targetPos, stopRadius)
             end
             if wp then
                 hum:MoveTo(wp.Position)
-                if wp.Action == Enum.PathWaypointAction.Jump then
-                    hum.Jump = true
-                end
+                if wp.Action == Enum.PathWaypointAction.Jump then hum.Jump = true end
                 return
             end
         end
     end
-
     hum:MoveTo(targetPos)
-
     if Bot.PathComputing then return end
     local now = tick()
     if now - Bot.LastPathTime < 0.4 then return end
     Bot.LastPathTime = now
     Bot.PathComputing = true
-
     local startPos = myRoot.Position
     task.spawn(function()
         pcall(function()
             local path = PathService:CreatePath({
-                AgentRadius = 2,
-                AgentHeight = 5,
-                AgentCanJump = true,
-                AgentCanClimb = false
+                AgentRadius = 2, AgentHeight = 5,
+                AgentCanJump = true, AgentCanClimb = false
             })
             path:ComputeAsync(startPos, targetPos)
             if path.Status == Enum.PathStatus.Success then
@@ -409,12 +511,10 @@ end
 
 local function humanKite(hum, myRoot, targetPos, now)
     local hd = hDist(myRoot.Position, targetPos)
-
     if now - Bot.LastStrafeFlip > 1.4 then
         Bot.LastStrafeFlip = now
         Bot.StrafeDir = -Bot.StrafeDir
     end
-
     if hd < Bot.KeepDistance then
         Bot.State = "RETREAT"
         local away = myRoot.Position - targetPos
@@ -427,7 +527,6 @@ local function humanKite(hum, myRoot, targetPos, now)
         Bot.WaypointIndex = 1
         return
     end
-
     if hd > Bot.ShootRange then
         Bot.State = "ADVANCE"
         local toTarget = targetPos - myRoot.Position
@@ -438,7 +537,6 @@ local function humanKite(hum, myRoot, targetPos, now)
         moveWithPath(hum, myRoot, stopPos, 8)
         return
     end
-
     Bot.State = "ORBIT"
     local toTarget = targetPos - myRoot.Position
     local flat = Vector3.new(toTarget.X, 0, toTarget.Z)
@@ -446,11 +544,8 @@ local function humanKite(hum, myRoot, targetPos, now)
     local dir = flat.Unit
     local perp = Vector3.new(-dir.Z, 0, dir.X) * Bot.StrafeDir
     local radialCorrection = 0
-    if hd > Bot.KeepDistance + 10 then
-        radialCorrection = 0.4
-    elseif hd < Bot.KeepDistance + 5 then
-        radialCorrection = -0.4
-    end
+    if hd > Bot.KeepDistance + 10 then radialCorrection = 0.4
+    elseif hd < Bot.KeepDistance + 5 then radialCorrection = -0.4 end
     local radial = dir * radialCorrection
     local moveVec = perp + radial
     if moveVec.Magnitude > 0.1 then
@@ -460,9 +555,9 @@ local function humanKite(hum, myRoot, targetPos, now)
     Bot.WaypointIndex = 1
 end
 
-local function titanRush(hum, myRoot, targetPos, stopRadius)
+local function titanRush(hum, myRoot, targetPos)
     Bot.State = "TITAN RUSH"
-    moveWithPath(hum, myRoot, targetPos, stopRadius or 3)
+    moveWithPath(hum, myRoot, targetPos, Bot.TitanAttackRange)
 end
 
 local function checkStuck(myRoot)
@@ -471,17 +566,11 @@ local function checkStuck(myRoot)
         Bot.LastStuckCheck = now
         if Bot.LastPos then
             local moved = (myRoot.Position - Bot.LastPos).Magnitude
-            if moved < 2 then
-                Bot.StuckTimer = Bot.StuckTimer + 0.6
-            else
-                Bot.StuckTimer = 0
-            end
+            if moved < 2 then Bot.StuckTimer = Bot.StuckTimer + 0.6
+            else Bot.StuckTimer = 0 end
         end
         Bot.LastPos = myRoot.Position
-        if Bot.StuckTimer > 1.8 then
-            Bot.StuckTimer = 0
-            return true
-        end
+        if Bot.StuckTimer > 1.8 then Bot.StuckTimer = 0 return true end
     end
     return false
 end
@@ -513,9 +602,7 @@ local function findDownedPlayer()
                 local prompt = anchor:FindFirstChildWhichIsA("ProximityPrompt", true)
                 if prompt and prompt.Enabled then
                     local pos = getAnchorPos(anchor)
-                    if pos then
-                        return {player = plr, anchor = anchor, prompt = prompt, pos = pos}
-                    end
+                    if pos then return {player = plr, anchor = anchor, prompt = prompt, pos = pos} end
                 end
             end
         end
@@ -540,9 +627,7 @@ local function hasImmediateThreat(myPos, radius)
     for _, npc in ipairs(AIFolder:GetChildren()) do
         if npc:IsA("Model") and isEnemy(npc) and isValidEnemy(npc) then
             local r = getRoot(npc)
-            if r and hDist(myPos, r.Position) < radius then
-                return true
-            end
+            if r and hDist(myPos, r.Position) < radius then return true end
         end
     end
     return false
@@ -555,18 +640,15 @@ local function doDamageTeleport()
     local myRoot = char and char:FindFirstChild("HumanoidRootPart")
     if not myRoot then return end
     DamageTP.LastTP = now
-
     local currentPos = myRoot.Position
     local currentY = currentPos.Y
-
     local rayParams = RaycastParams.new()
     rayParams.FilterType = Enum.RaycastFilterType.Exclude
     local ignored = WS:FindFirstChild("Ignored")
     local filter = {char}
     if ignored then table.insert(filter, ignored) end
     rayParams.FilterDescendantsInstances = filter
-
-    for attempt = 1, 20 do
+    for _ = 1, 20 do
         local angle = math.random() * math.pi * 2
         local dist = DamageTP.Distance * (0.6 + math.random() * 0.6)
         local dx = math.cos(angle) * dist
@@ -607,12 +689,9 @@ local function runBot()
 
     if now - Bot.LastTitanCheck > 0.5 then
         Bot.LastTitanCheck = now
-        Bot.IsTitan = isTitan()
-        Bot.TitanKind = detectTitanKind()
-        if Bot.IsTitan and now - Bot.LastKeyRefresh > 2 then
-            Bot.LastKeyRefresh = now
-            refreshSkillKeys()
-        end
+        local kind = detectTitanKind()
+        Bot.TitanKind = kind
+        Bot.IsTitan = kind ~= "NONE"
     end
 
     local myRoot = getMyRoot()
@@ -673,25 +752,17 @@ local function runBot()
 
     local targetRoot = getRoot(Bot.Target)
     if not targetRoot then return end
-
     local hd = hDist(myRoot.Position, targetRoot.Position)
 
     if Bot.IsTitan then
-        if Bot.TitanKind == "GIANT" then
-            titanRush(hum, myRoot, targetRoot.Position, 3)
-            if hd <= 7 then
-                giantScreenClick()
+        titanRush(hum, myRoot, targetRoot.Position)
+        if hd <= Bot.TitanAttackRange + 5 then
+            if Bot.TitanKind == "GIANT" then
+                giantClick()
             end
-            if hd <= 40 and #Bot.SkillKeys > 0 then
-                if now - Bot.LastAbility >= Bot.AbilityCooldown then
-                    useAbility()
-                end
-            end
-        else
-            titanRush(hum, myRoot, targetRoot.Position, 3)
-            if hd <= Bot.KeepDistance + 10 then
-                useAbility()
-            end
+            useSkill(Bot.Target)
+        elseif hd <= 40 then
+            useSkill(Bot.Target)
         end
     else
         humanKite(hum, myRoot, targetRoot.Position, now)
@@ -710,9 +781,7 @@ local function runBot()
         end
     end
 
-    if checkStuck(myRoot) then
-        unstuck(hum, myRoot)
-    end
+    if checkStuck(myRoot) then unstuck(hum, myRoot) end
 
     if now - Bot.LastActionTime > 8 then
         Bot.LastActionTime = now
@@ -739,11 +808,7 @@ task.spawn(function()
     Auto.AFKRemote = ReplicatedStorage:FindFirstChild("AFKCheckEvent")
     Auto.PartnerDiedRemote = findRemote("PartnerDied")
     Auto.RemoveRemote = findRemote("RemovePartner")
-
-    if not Auto.AFKRemote then
-        Auto.AFKRemote = ReplicatedStorage:WaitForChild("AFKCheckEvent", 15)
-    end
-
+    if not Auto.AFKRemote then Auto.AFKRemote = ReplicatedStorage:WaitForChild("AFKCheckEvent", 15) end
     if Auto.AFKRemote then
         Auto.AFKRemote.OnClientEvent:Connect(function()
             if not Auto.AFKEnabled then return end
@@ -753,7 +818,6 @@ task.spawn(function()
             if gui then gui:Destroy() end
         end)
     end
-
     if Auto.PartnerDiedRemote then
         Auto.PartnerDiedRemote.OnClientEvent:Connect(function()
             if not Auto.PartnerDropEnabled then return end
@@ -798,8 +862,8 @@ local function onCharAdded(c)
     task.wait(1)
     bindDamage()
     Bot.TitanKind = "NONE"
-    Bot.SkillKeys = {}
-    Bot.LastKeyRefresh = 0
+    Bot.Waypoints = {}
+    Bot.WaypointIndex = 1
 end
 
 if LocalPlayer.Character then bindDamage() end
@@ -810,7 +874,7 @@ local function getViewport()
     return cam and cam.ViewportSize or Vector2.new(800, 600)
 end
 
-local isMobile = UIS.TouchEnabled and not UIS.KeyboardEnabled
+local isMobile = UIS.TouchEnabled and not UIS.MouseEnabled
 
 local function calcLayout()
     local vp = getViewport()
@@ -1015,10 +1079,8 @@ UIS.InputChanged:Connect(function(input)
         local delta = input.Position - floatDragStart
         if math.abs(delta.X) > 6 or math.abs(delta.Y) > 6 then floatMoved = true end
         local vp = getViewport()
-        local nx = floatStartPos.X.Offset + delta.X
-        local ny = floatStartPos.Y.Offset + delta.Y
-        nx = math.clamp(nx, 0, math.max(0, vp.X - 50))
-        ny = math.clamp(ny, 0, math.max(0, vp.Y - 50))
+        local nx = math.clamp(floatStartPos.X.Offset + delta.X, 0, math.max(0, vp.X - 50))
+        local ny = math.clamp(floatStartPos.Y.Offset + delta.Y, 0, math.max(0, vp.Y - 50))
         FloatBtn.Position = UDim2.new(0, nx, 0, ny)
     end
 end)
@@ -1033,16 +1095,8 @@ UIS.InputEnded:Connect(function(input)
     end
 end)
 
-HB.MouseButton1Click:Connect(function()
-    PlaySound(ClickSound)
-    Win.Visible = false
-    FloatBtn.Visible = true
-end)
-CB.MouseButton1Click:Connect(function()
-    PlaySound(ClickSound)
-    Win.Visible = false
-    FloatBtn.Visible = true
-end)
+HB.MouseButton1Click:Connect(function() PlaySound(ClickSound) Win.Visible = false FloatBtn.Visible = true end)
+CB.MouseButton1Click:Connect(function() PlaySound(ClickSound) Win.Visible = false FloatBtn.Visible = true end)
 
 local dragging, dragStart, startPos = false, nil, nil
 TB.InputBegan:Connect(function(input)
@@ -1156,8 +1210,7 @@ local function Toggle(name, default, cb)
         toggled = not toggled
         TS:Create(btn, TweenInfo.new(0.2), {BackgroundColor3 = toggled and HubC or Color3.fromRGB(50, 60, 75)}):Play()
         TS:Create(dot, TweenInfo.new(0.2), {Position = toggled and UDim2.new(1, -dotSize - 2, 0.5, -dotSize / 2) or UDim2.new(0, 2, 0.5, -dotSize / 2)}):Play()
-        local fn = cb
-        fn(toggled)
+        cb(toggled)
     end)
 end
 
@@ -1196,15 +1249,10 @@ local function Slider(name, min, max, default, decimals, cb)
     local dragging = false
     local function update(pct)
         local v = min + (max - min) * pct
-        if decimals == 0 then
-            v = math.floor(v)
-        else
-            v = math.floor(v * (10 ^ decimals)) / (10 ^ decimals)
-        end
+        if decimals == 0 then v = math.floor(v) else v = math.floor(v * (10 ^ decimals)) / (10 ^ decimals) end
         sbf.Size = UDim2.new(pct, 0, 1, 0)
         sl.Text = name .. ": " .. v
-        local fn = cb
-        fn(v)
+        cb(v)
     end
     local function touchUpdate(input)
         local bp = sb.AbsolutePosition
@@ -1244,13 +1292,12 @@ local function Button(name, cb)
     Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
     b.MouseButton1Click:Connect(function()
         PlaySound(ClickSound)
-        local fn = cb
-        fn()
+        cb()
     end)
 end
 
 Section("Bot")
-Desc("Targets Bathub NPCs only. Human circles & shoots. Titans rush. Auto-detects Giant Screen vs Default titan.")
+Desc("Fires skill remotes directly (works on PC & mobile). Auto-detects titan type.")
 Toggle("Enable Bot", false, function(v)
     Bot.Enabled = v
     if v then
@@ -1272,6 +1319,7 @@ Toggle("Enable Bot", false, function(v)
         Notify("Bot", "Disabled", 2)
     end
 end)
+Toggle("Debug Prints", false, function(v) Bot.Debug = v end)
 
 Section("Distance")
 Slider("Keep Distance", 20, 150, 60, 0, function(v) Bot.KeepDistance = v end)
@@ -1284,15 +1332,25 @@ Section("Movement")
 Toggle("Use Pathfinding", true, function(v) Bot.UsePathfinding = v end)
 
 Section("Titan")
+Desc("Forces the bot into Giant Screen or Default titan logic.")
+Button("Force: Giant Screen", function()
+    Bot.ForceTitanKind = "GIANT"
+    Notify("Titan", "Forced: Giant Screen", 2)
+end)
+Button("Force: Default Titan", function()
+    Bot.ForceTitanKind = "DEFAULT"
+    Notify("Titan", "Forced: Default", 2)
+end)
+Button("Force: Auto-Detect", function()
+    Bot.ForceTitanKind = nil
+    Notify("Titan", "Auto-detect enabled", 2)
+end)
 Toggle("Use Abilities", true, function(v) Bot.UseAbilities = v end)
-Slider("Ability Cooldown", 0.5, 5, 1.5, 1, function(v) Bot.AbilityCooldown = v end)
-Slider("Giant Click Interval", 0.15, 1.5, 0.4, 2, function(v) Bot.GiantClickInterval = v end)
+Slider("Ability Cooldown", 0.2, 5, 0.8, 2, function(v) Bot.AbilityCooldown = v end)
+Slider("Titan Attack Range", 5, 40, 10, 0, function(v) Bot.TitanAttackRange = v end)
+Slider("Giant Click Interval", 0.1, 1.5, 0.3, 2, function(v) Bot.GiantClickInterval = v end)
 Button("Mode: Cycle", function() Bot.AbilityMode = "Cycle" Notify("Bot", "Cycle mode", 2) end)
 Button("Mode: All", function() Bot.AbilityMode = "All" Notify("Bot", "All mode", 2) end)
-Button("Refresh Skill Keys", function()
-    refreshSkillKeys()
-    Notify("Bot", "Keys refreshed: " .. #Bot.SkillKeys, 2)
-end)
 
 Section("Survival")
 Toggle("Damage Teleport", false, function(v)
@@ -1302,10 +1360,7 @@ end)
 Slider("Teleport Distance", 15, 60, 30, 0, function(v) DamageTP.Distance = v end)
 
 Section("Auto Functions")
-Toggle("Auto Join Game (Ready)", false, function(v)
-    Auto.ReadyEnabled = v
-    Notify("Auto Ready", v and "Enabled" or "Disabled", 2)
-end)
+Toggle("Auto Join Game (Ready)", false, function(v) Auto.ReadyEnabled = v Notify("Auto Ready", v and "Enabled" or "Disabled", 2) end)
 Toggle("Auto Pass AFK Puzzle", false, function(v)
     Auto.AFKEnabled = v
     Notify("Auto AFK", v and "Enabled" or "Disabled", 2)
@@ -1314,14 +1369,8 @@ Toggle("Auto Pass AFK Puzzle", false, function(v)
         if gui then gui:Destroy() end
     end
 end)
-Toggle("Auto Drop Partner On Death", false, function(v)
-    Auto.PartnerDropEnabled = v
-    Notify("Auto Drop Partner", v and "Enabled" or "Disabled", 2)
-end)
-Toggle("Auto Revive Downed Players", false, function(v)
-    Auto.ReviveEnabled = v
-    Notify("Auto Revive", v and "Enabled" or "Disabled", 2)
-end)
+Toggle("Auto Drop Partner On Death", false, function(v) Auto.PartnerDropEnabled = v Notify("Auto Drop Partner", v and "Enabled" or "Disabled", 2) end)
+Toggle("Auto Revive Downed Players", false, function(v) Auto.ReviveEnabled = v Notify("Auto Revive", v and "Enabled" or "Disabled", 2) end)
 
 Section("Controls")
 Button("Reset Target", function()
@@ -1355,25 +1404,14 @@ end
 
 task.defer(storeBaseSizes)
 
-local TabsFrame = nil
-
 local function applyResponsive()
     local w, h, side, scale = calcLayout()
     winW, winH, SideWidth, uiScale = w, h, side, scale
-
     Win.Size = UDim2.new(0, w, 0, h)
     if not userMoved then
         Win.Position = UDim2.new(0.5, -w / 2, 0.5, -h / 2)
     end
-
-    if TabsFrame then
-        TabsFrame.Size = UDim2.new(0, side, 1, -TB.Size.Y.Offset)
-    end
-    if CA then
-        CA.Size = UDim2.new(1, -side, 1, -TB.Size.Y.Offset - 32)
-        CA.Position = UDim2.new(0, side, 0, TB.Size.Y.Offset + 26)
-    end
-
+    CA.Size = UDim2.new(1, -20, 1, -TB.Size.Y.Offset - 32)
     for _, d in ipairs(Win:GetDescendants()) do
         if d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox") then
             local base = d:GetAttribute("_baseSize")
@@ -1382,15 +1420,7 @@ local function applyResponsive()
             end
         end
     end
-
     NFs.Size = UDim2.new(0, math.min(280, w - 40), 0, 0)
-
-    local vp = getViewport()
-    if FloatBtn.Visible then
-        local px = FloatBtn.Position.X.Offset
-        local py = FloatBtn.Position.Y.Offset
-        FloatBtn.Position = UDim2.new(0, math.clamp(px, 0, math.max(0, vp.X - 50)), 0, math.clamp(py, 0, math.max(0, vp.Y - 50)))
-    end
 end
 
 local function bindViewport()
@@ -1409,9 +1439,7 @@ WS:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
     pcall(applyResponsive)
 end)
 
-task.defer(function()
-    pcall(applyResponsive)
-end)
+task.defer(function() pcall(applyResponsive) end)
 
 task.spawn(function()
     while GUI.Parent do
@@ -1428,12 +1456,8 @@ task.spawn(function()
             if myRoot and targetRoot then
                 parts[#parts + 1] = math.floor(hDist(myRoot.Position, targetRoot.Position)) .. " st"
             end
-            local tool = getWeapon()
-            if tool then
-                parts[#parts + 1] = tool:FindFirstChild("Shoot") and "LASER" or "GUN"
-            end
-            if Bot.PathComputing then
-                parts[#parts + 1] = "PATH..."
+            if Bot.IsTitan and Bot.LastSkill ~= "" then
+                parts[#parts + 1] = Bot.LastSkill
             end
             StatusLabel.Text = table.concat(parts, " • ")
             StatusLabel.TextColor3 = Color3.fromRGB(120, 200, 120)
