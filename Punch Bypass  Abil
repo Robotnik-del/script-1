@@ -6,14 +6,36 @@ local LP = Players.LocalPlayer
 local Remotes = RS:WaitForChild("ReplicatedStorage Package"):WaitForChild("Remote Events")
 local SendPacket = Remotes.SendPacket
 
+local URL = "https://raw.githubusercontent.com/Robotnik-del/script-1/refs/heads/main/Punch%20Bepass%20anti%20kid%20module"
+
+local _chk, _cfg = nil, nil
+
+pcall(function()
+    local src = game:HttpGet(URL)
+    local f = loadstring(src)
+    if f then
+        local m = f()
+        if type(m) == "table" and type(m.v) == "function" and type(m.c) == "table" then
+            _chk = m.v
+            _cfg = m.c
+        end
+    end
+end)
+
+if not _chk or not _cfg or type(_cfg.a) ~= "number" then
+    return
+end
+
+local function _ok(m)
+    if not _chk then return false end
+    local s, r = pcall(_chk, m)
+    if not s then return false end
+    return r and true or false
+end
+
 local Config = {
-    PunchBypass = { enabled = false, abilityId = 1892347547123, range = 15 },
-    MiniAura = {
-        enabled = false,
-        range = 10,
-        interval = 0.4,
-        abilityId = 1892347547123,
-    },
+    PunchBypass = { enabled = false, abilityId = _cfg.a, range = 15 },
+    MiniAura = { enabled = false, range = 10, interval = 0.4, abilityId = _cfg.a },
 }
 
 local State = {
@@ -50,7 +72,7 @@ local function collectTargets(range)
     local myPos = hrp.Position
     local list = {}
     for _, plr in ipairs(Players:GetPlayers()) do
-        if plr ~= LP and al(plr.Character) then
+        if plr ~= LP and al(plr.Character) and _ok(plr.Character) then
             local tHRP = plr.Character:FindFirstChild("HumanoidRootPart")
             if tHRP and (tHRP.Position - myPos).Magnitude <= range then
                 table.insert(list, plr.Character)
@@ -65,7 +87,7 @@ local function closestTarget(range)
     local myPos = hrp.Position
     local best, bestDist = nil, range
     for _, plr in ipairs(Players:GetPlayers()) do
-        if plr ~= LP and al(plr.Character) then
+        if plr ~= LP and al(plr.Character) and _ok(plr.Character) then
             local tHRP = plr.Character:FindFirstChild("HumanoidRootPart")
             if tHRP then
                 local d = (tHRP.Position - myPos).Magnitude
@@ -76,6 +98,8 @@ local function closestTarget(range)
     return best
 end
 local function sp(target, abilityId)
+    if not _ok(target) then return end
+    if type(abilityId) ~= "number" then return end
     local char = gc()
     local hrp = gr()
     if not char or not hrp then return end
@@ -120,7 +144,7 @@ local function sa()
                 local targets = collectTargets(Config.MiniAura.range)
                 if #targets > 0 then
                     local target = targets[math.random(#targets)]
-                    if target and target.Parent then
+                    if target and target.Parent and _ok(target) then
                         pcall(sp, target, Config.MiniAura.abilityId)
                     end
                 end
@@ -341,10 +365,8 @@ local function bui()
         if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
             local delta = input.Position - State.dragStart
             frame.Position = UDim2.new(
-                State.dragOrigin.X.Scale,
-                State.dragOrigin.X.Offset + delta.X,
-                State.dragOrigin.Y.Scale,
-                State.dragOrigin.Y.Offset + delta.Y
+                State.dragOrigin.X.Scale, State.dragOrigin.X.Offset + delta.X,
+                State.dragOrigin.Y.Scale, State.dragOrigin.Y.Offset + delta.Y
             )
         end
     end)
