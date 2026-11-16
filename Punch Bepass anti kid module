@@ -1,67 +1,37 @@
 return function(API)
     local C = API.Config
     local S = API.State
-    local Players = API.Players
-    local RunService = API.RunService
     local LP = API.LP
 
     local M = {
-        Enabled = true,
         Task = "Idle",
-        LastTaskChange = 0,
-        LastPos = nil,
-        StuckTimer = 0,
-        StuckAttempts = 0,
-        LastJump = 0,
-        LastAttack = 0,
-        LastAbility = 0,
-        LastSprintState = false,
-        LastHeal = 0,
-        LastLootTouch = 0,
-        CurrentLoot = nil,
-        CurrentTarget = nil,
-        CombatEnterDist = 40,
-        CombatExitDist = 60,
-        LootSearchRadius = 600,
-        HealThreshold = 0.35,
-        AttackDistMelee = 8,
-        AttackDistGun = 15,
-        AttackDistBear = 10,
-        SprintDist = 15,
-        TickRate = 0.1,
+        LastAttack = 0, LastM1 = 0, LastSlot = 0, LastStanceSwitch = 0,
+        LastHeal = 0, LastLootTouch = 0,
+        LastPos = nil, StuckTime = 0, LastJump = 0,
+        EnterDist = 40, ExitDist = 60,
     }
 
     local function now() return os.clock() end
     local function setTask(t)
-        if M.Task ~= t then
-            M.Task = t
-            M.LastTaskChange = now()
-            if API.setTask then API.setTask(t) end
-        end
+        if M.Task ~= t then M.Task = t; API.setTask(t) end
     end
-
     local function getHP()
-        local hum = API.getHum()
-        if not hum then return 1 end
-        return hum.Health / math.max(hum.MaxHealth, 1)
+        local h = API.getHum(); if not h then return 1 end
+        return h.Health / math.max(h.MaxHealth, 1)
+    end
+    local function isBearRole()
+        local c = API.getChar(); return c and API.isPlayerBear(c) or false
     end
 
-    local function isBear()
-        local char = API.getChar()
-        return char and API.isPlayerBear(char) or false
-    end
-
-    local function nearestThreat()
-        local root = API.getRoot()
-        if not root then return nil, math.huge end
-        local bears = workspace:FindFirstChild("Bears")
-        if not bears then return nil, math.huge end
+    local function nearestEnemyBear()
+        local root = API.getRoot(); if not root then return nil, math.huge end
+        local bears = workspace:FindFirstChild("Bears"); if not bears then return nil, math.huge end
         local best, bestDist = nil, math.huge
         for _, m in ipairs(bears:GetChildren()) do
-            if m:IsA("Model") and API.isAlive(m) then
-                local part = m:FindFirstChild("HumanoidRootPart") or m:FindFirstChild("Head")
-                if part then
-                    local d = (part.Position - root.Position).Magnitude
+            if m:IsA("Model") and API.isAlive(m) and m ~= API.getChar() then
+                local p = m:FindFirstChild("HumanoidRootPart") or m:FindFirstChild("Head")
+                if p then
+                    local d = (p.Position - root.Position).Magnitude
                     if d < bestDist then bestDist = d; best = m end
                 end
             end
@@ -69,304 +39,178 @@ return function(API)
         return best, bestDist
     end
 
-    local function nearestLoot()
-        local root = API.getRoot()
-        if not root then return nil, math.huge end
-        local best, bestDist = nil, M.LootSearchRadius
-        if C.FarmPages then
-            local pages = workspace:FindFirstChild("Pages")
-            if pages then
-                for _, obj in ipairs(pages:GetChildren()) do
-                    if obj:IsA("BasePart") then
-                        local d = (obj.Position - root.Position).Magnitude
-                        if d < bestDist then bestDist = d; best = obj end
-                    end
-                end
-            end
-        end
-        if C.FarmCrates then
-            local interactables = workspace:FindFirstChild("Interactables")
-            local crates = interactables and interactables:FindFirstChild("Crates")
-            if crates then
-                for _, obj in ipairs(crates:GetChildren()) do
-                    local part = obj:IsA("BasePart") and obj or (obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart"))
-                    if part then
-                        local d = (part.Position - root.Position).Magnitude
-                        if d < bestDist then bestDist = d; best = part end
-                    end
-                end
-            end
-        end
-        return best, bestDist
+    local function hasMedkit()
+        local bp = LP:FindFirstChild("Backpack")
+        return bp and bp:FindFirstChild("Medkit") ~= nil
     end
 
-    local function equipBestTool()
-        local char = API.getChar()
-        if not char then return nil end
-        local tool = char:FindFirstChildWhichIsA("Tool")
-        if tool then return tool end
-        local backpack = LP:FindFirstChild("Backpack")
-        if not backpack then return nil end
+    local function useMedkit()
+        if not API.MedkitRemote then return false end
+        local t = now()
+        if t - M.LastHeal < 3 then return false end
+        M.LastHeal = t
         local hum = API.getHum()
-        if not hum then return nil end
-        local best = nil
-        for _, t in ipairs(backpack:GetChildren()) do
-            if t:IsA("Tool") then
-                local name = t.Name
-                if name == "Medkit" or name == "Hearthstone" or name == "Flare" then
-                else
-                    best = t
-                    break
-                end
-            end
-        end
-        if best then
-            pcall(function() hum:EquipTool(best) end)
-            return best
-        end
-        return nil
-    end
-
-    local function sprint(on)
-        if M.LastSprintState == on then return end
-        M.LastSprintState = on
-        if isBear() then
-            API.setBearSprint(on)
-        end
-    end
-
-    local function checkStuck()
-        local root = API.getRoot()
-        if not root then return end
-        local pos = root.Position
-        if M.LastPos then
-            local moved = (pos - M.LastPos).Magnitude
-            if moved < 1 then
-                M.StuckTimer = M.StuckTimer + M.TickRate
-            else
-                M.StuckTimer = 0
-                M.StuckAttempts = 0
-            end
-        end
-        M.LastPos = pos
-        if M.StuckTimer > 1.5 then
-            local hum = API.getHum()
-            if hum and now() - M.LastJump > 0.5 then
-                M.LastJump = now()
-                hum.Jump = true
-                M.StuckAttempts = M.StuckAttempts + 1
-                if M.StuckAttempts >= 3 then
-                    API.clearPath()
-                    M.StuckAttempts = 0
-                end
-            end
-            M.StuckTimer = 0
-        end
-    end
-
-    local function doHeal()
-        local hum = API.getHum()
-        if not hum or not API.MedkitRemote then return false end
-        if now() - M.LastHeal < 2 then return true end
-        local backpack = LP:FindFirstChild("Backpack")
-        local medkit = backpack and backpack:FindFirstChild("Medkit")
-        if not medkit then return false end
-        local root = API.getRoot()
-        local threat, dist = nearestThreat()
-        if threat and dist < 20 then
-            if root and threat:FindFirstChild("HumanoidRootPart") then
-                local away = (root.Position - threat.HumanoidRootPart.Position).Unit
-                API.moveTo(root.Position + away * 30)
-                sprint(true)
-            end
-            return true
-        end
-        M.LastHeal = now()
+        local bp = LP:FindFirstChild("Backpack")
+        local med = bp and bp:FindFirstChild("Medkit")
+        if not med or not hum then return false end
         pcall(function()
-            hum:EquipTool(medkit)
-            task.wait(0.2)
+            hum:EquipTool(med)
+            task.wait(0.15)
             API.MedkitRemote:FireServer("Start")
         end)
         return true
     end
 
-    local function doRetreat()
-        local root = API.getRoot()
-        if not root then return end
-        local threat = nearestThreat()
-        local dir
-        if threat and threat:FindFirstChild("HumanoidRootPart") then
-            dir = root.Position - threat.HumanoidRootPart.Position
-        else
-            dir = -root.CFrame.LookVector
-        end
-        dir = Vector3.new(dir.X, 0, dir.Z)
-        if dir.Magnitude < 0.1 then dir = Vector3.new(1, 0, 0) end
-        dir = dir.Unit
-        API.moveTo(root.Position + dir * 40)
-        sprint(true)
+    local function retreatFrom(target)
+        local root = API.getRoot(); if not root then return end
+        local tp = target:FindFirstChild("HumanoidRootPart") or target:FindFirstChild("Head")
+        if not tp then return end
+        local d = root.Position - tp.Position
+        d = Vector3.new(d.X, 0, d.Z)
+        if d.Magnitude < 0.1 then d = Vector3.new(1, 0, 0) end
+        d = d.Unit
+        API.moveTo(root.Position + d * 40)
+        API.setBearSprint(true)
     end
 
-    local function doCombat()
-        local threat, dist = nearestThreat()
-        if not threat then return false end
-        local root = API.getRoot()
-        if not root then return false end
-        local targetPart = threat:FindFirstChild("HumanoidRootPart") or threat:FindFirstChild("Head")
-        if not targetPart then return false end
-
-        if isBear() then
-            if dist > M.AttackDistBear then
-                API.moveTo(targetPart.Position)
-                sprint(true)
-            else
-                sprint(false)
-                local hum = API.getHum()
-                if hum then
-                    local look = Vector3.new(targetPart.Position.X, root.Position.Y, targetPart.Position.Z)
-                    pcall(function() root.CFrame = CFrame.new(root.Position, look) end)
-                end
-                if now() - M.LastAbility > 0.6 then
-                    M.LastAbility = now()
-                    API.useBearAbility(nil)
-                end
-                if now() - M.LastAttack > 0.5 then
-                    M.LastAttack = now()
-                    API.useBearAbility("Default")
-                end
-            end
-        else
-            equipBestTool()
-            local tool = API.getEquippedTool()
-            if not tool then return false end
-            local remoteName = tool.Name
-            local isGun = remoteName ~= "FireBrand" and remoteName ~= "Knife" and remoteName ~= "FireAxe" and remoteName ~= "BaseballBat" and remoteName ~= "Pickaxe"
-            local atkDist = isGun and M.AttackDistGun or M.AttackDistMelee
-            if dist > atkDist then
-                API.moveTo(targetPart.Position)
-                sprint(true)
-            else
-                sprint(false)
-                local hum = API.getHum()
-                if hum then
-                    local look = Vector3.new(targetPart.Position.X, root.Position.Y, targetPart.Position.Z)
-                    pcall(function() root.CFrame = CFrame.new(root.Position, look) end)
-                end
-                if isGun then
-                    if now() - M.LastAttack > C.GunCooldown then
-                        M.LastAttack = now()
-                        pcall(API.fireNearestGun)
-                    end
-                else
-                    if now() - M.LastAttack > C.MeleeCooldown then
-                        M.LastAttack = now()
-                        pcall(API.hitNearestMelee)
-                    end
-                end
-            end
-        end
-        return true
-    end
-
-    local function doLoot()
-        local loot, dist = nearestLoot()
-        if not loot then return false end
-        local root = API.getRoot()
-        if not root then return false end
-        if dist > 10 then
-            API.moveTo(loot.Position)
-            sprint(true)
-            return true
-        end
-        sprint(false)
+    local function gotoLoot(loot, dist)
+        if not loot then return end
+        if dist > 8 then API.moveTo(loot.Position); API.setBearSprint(true); return end
+        API.setBearSprint(false)
+        local hum = API.getHum()
+        if hum then pcall(function() hum:MoveTo(loot.Position) end) end
         if now() - M.LastLootTouch > 0.3 then
             M.LastLootTouch = now()
             pcall(API.touchLoot, loot)
         end
-        return true
+    end
+
+    local function stopMoving()
+        API.setBearSprint(false)
+        local hum = API.getHum(); local root = API.getRoot()
+        if hum and root then pcall(function() hum:MoveTo(root.Position) end) end
+    end
+
+    local function equipBestWeapon()
+        local hum = API.getHum(); if not hum then return nil end
+        local bp = LP:FindFirstChild("Backpack"); if not bp then return nil end
+        local priority = {
+            GoldenGun=true, AK47=true, Minigun=true, GoldenMinigun=true,
+            CombatShotgun=true, Shotgun=true, SMG=true, Flamethrower=true,
+            OldRifle=true, Pistol=true, FireBrand=true, FireAxe=true,
+            BaseballBat=true, Knife=true, Pickaxe=true,
+        }
+        local pick = nil
+        for _, t in ipairs(bp:GetChildren()) do
+            if t:IsA("Tool") and priority[t.Name] then pick = t; break end
+        end
+        if not pick then
+            for _, t in ipairs(bp:GetChildren()) do
+                if t:IsA("Tool") and t.Name ~= "Medkit" and t.Name ~= "Hearthstone" and t.Name ~= "Flare" then
+                    pick = t; break
+                end
+            end
+        end
+        if pick then pcall(function() hum:EquipTool(pick) end); return pick end
+        return nil
+    end
+
+    local function combat(target, dist, bear)
+        local root = API.getRoot(); local hum = API.getHum()
+        if not root or not hum then return end
+        local tp = target:FindFirstChild("HumanoidRootPart") or target:FindFirstChild("Head")
+        if not tp then return end
+        local look = Vector3.new(tp.Position.X, root.Position.Y, tp.Position.Z)
+        if (look - root.Position).Magnitude > 0.1 then
+            pcall(function() root.CFrame = CFrame.new(root.Position, look) end)
+        end
+        if bear then
+            if dist > 10 then API.moveTo(tp.Position); API.setBearSprint(true)
+            else
+                API.setBearSprint(false)
+                local t = now()
+                if t - M.LastM1 > 1.05 then
+                    M.LastM1 = t
+                    pcall(function() API.BearAbilityRemote:FireServer("Use", "Default", tp.Position) end)
+                end
+                if t - M.LastSlot > 1.05 then
+                    M.LastSlot = t
+                    local slot = math.random(1, 6)
+                    pcall(function() API.BearAbilityRemote:FireServer("Use", slot, tp.Position) end)
+                end
+            end
+        else
+            local tool = API.getEquippedTool()
+            if not tool then tool = equipBestWeapon() end
+            if not tool then return end
+            local isGun = API.getWeaponRemote(tool, "FireBullet") ~= nil
+            local isMelee = API.getWeaponRemote(tool, "MeleeRemote") ~= nil
+            local range = isGun and C.GunRange or C.MeleeRange
+            if dist > range then API.moveTo(tp.Position); API.setBearSprint(true)
+            else
+                stopMoving()
+                local t = now()
+                if isGun and t - M.LastAttack > C.GunCooldown then
+                    M.LastAttack = t; pcall(API.fireNearestGun)
+                elseif isMelee and t - M.LastAttack > C.MeleeCooldown then
+                    M.LastAttack = t; pcall(API.hitNearestMelee)
+                end
+            end
+        end
+    end
+
+    local function checkStuck()
+        local root = API.getRoot(); if not root then return end
+        if M.LastPos then
+            if (root.Position - M.LastPos).Magnitude < 1 then M.StuckTime = M.StuckTime + 0.1
+            else M.StuckTime = 0 end
+        end
+        M.LastPos = root.Position
+        if M.StuckTime > 1.5 then
+            local hum = API.getHum()
+            if hum and now() - M.LastJump > 0.5 then
+                M.LastJump = now(); hum.Jump = true; API.clearPath()
+            end
+            M.StuckTime = 0
+        end
     end
 
     local function tick()
-        if not M.Enabled then return end
         if not C.BotEnabled then setTask("Idle"); return end
-        local char = API.getChar()
-        local root = API.getRoot()
-        if not char or not root then setTask("Idle"); return end
-
+        local char = API.getChar(); local root = API.getRoot(); local hum = API.getHum()
+        if not char or not root or not hum then setTask("Idle"); return end
         checkStuck()
-
+        local bear = isBearRole()
         local hp = getHP()
-        local threat, dist = nearestThreat()
-        local loot, lootDist = nearestLoot()
 
-        local backpack = LP:FindFirstChild("Backpack")
-        local hasMedkit = backpack and backpack:FindFirstChild("Medkit") ~= nil
-
-        if hp < M.HealThreshold then
-            if hasMedkit and doHeal() then setTask("Heal"); return end
-            setTask("Retreat"); doRetreat(); return
+        if hp < C.BotRetreatHP then
+            local threat, tdist = nearestEnemyBear()
+            if threat and tdist < 20 then setTask("Retreat"); retreatFrom(threat); return end
+            if hasMedkit() then setTask("Heal"); if useMedkit() then return end end
         end
 
+        local bearTarget, bearDist = nearestEnemyBear()
         local inCombat = M.Task == "Combat"
-        local shouldCombat = false
-        if threat then
-            if inCombat and dist <= M.CombatExitDist then shouldCombat = true
-            elseif dist <= M.CombatEnterDist then shouldCombat = true end
-        end
+        local shouldCombat = bearTarget and ((inCombat and bearDist <= M.ExitDist) or bearDist <= M.EnterDist)
+        if shouldCombat then setTask("Combat"); combat(bearTarget, bearDist, bear); return end
 
-        if shouldCombat then
-            setTask("Combat")
-            if doCombat() then return end
-        end
+        local loot, lootDist = API.findNearestLoot()
+        if loot then setTask("Loot"); gotoLoot(loot, lootDist or math.huge); return end
 
-        if loot then
-            setTask("Loot")
-            if doLoot() then return end
-        end
+        if bearTarget then setTask("Combat"); combat(bearTarget, bearDist, bear); return end
 
-        if threat and dist <= M.CombatEnterDist then
-            setTask("Combat")
-            if doCombat() then return end
-        end
-
-        setTask("Idle")
-        sprint(false)
-        if isBear() and C.BearForceAggressive and API.BearStance then
-            local stance = API.BearStance.Get(char)
-            if stance == API.BearStance.FRIENDLY and not API.BearStance.Switching(char) and not API.BearStance.Locked(char) then
+        setTask("Idle"); stopMoving()
+        if bear and C.BearForceAggressive and API.BearAbilityRemote then
+            local now2 = workspace:GetServerTimeNow()
+            local switchEnds = char:GetAttribute("StanceSwitchEnds")
+            local switching = type(switchEnds) == "number" and switchEnds > now2
+            local stance = char:GetAttribute("Stance")
+            if stance == "Friendly" and not switching and now() - M.LastStanceSwitch > 3 then
+                M.LastStanceSwitch = now()
                 pcall(function() API.BearAbilityRemote:FireServer("Stance") end)
             end
         end
     end
 
-    local conn
-    local function start()
-        if conn then return end
-        conn = task.spawn(function()
-            while M.Enabled do
-                task.wait(M.TickRate)
-                pcall(tick)
-            end
-            conn = nil
-        end)
-    end
-
-    local function stop()
-        M.Enabled = false
-        if conn then task.cancel(conn); conn = nil end
-        pcall(API.clearPath)
-        sprint(false)
-    end
-
-    API.ModuleSelf = M
-    API.ModuleStop = stop
-
-    start()
-
-    return {
-        Tick = tick,
-        Stop = stop,
-        State = M,
-        Task = function() return M.Task end,
-    }
+    return { Tick = tick, State = M, Task = function() return M.Task end }
 end
